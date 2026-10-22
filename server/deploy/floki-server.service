@@ -1,0 +1,20 @@
+# Runs floki-server without Docker. Install: see server/README.md ("Without Docker").
+[Unit]
+Description=Floki sync server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=floki
+EnvironmentFile=/etc/floki/floki.env
+ExecStart=/usr/local/bin/floki-server
+Restart=always
+RestartSec=3
+# The server needs no write access to the filesystem.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

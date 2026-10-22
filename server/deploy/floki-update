@@ -1,0 +1,44 @@
+#!/bin/sh
+# Updates floki-server to the latest GitHub release and rolls back if it doesn't come up.
+# Install once: install -m 755 floki-update /usr/local/bin/floki-update   Then run: floki-update
+set -eu
+
+REPO="${FLOKI_REPO:-Adityakumar-blip/floki}"
+URL="https://github.com/$REPO/releases/latest/download/floki-server-linux-x64.tar.gz"
+BIN=/usr/local/bin/floki-server
+BIND=$(sed -n 's/^FLOKI_BIND=//p' /etc/floki/floki.env 2>/dev/null || true)
+HEALTH="http://${BIND:-127.0.0.1:8787}/api/auth/google/config"
+
+[ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo floki-update)"; exit 1; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+echo "Downloading $URL"
+curl -fsSL -o "$tmp/server.tar.gz" "$URL"
+tar -xzf "$tmp/server.tar.gz" -C "$tmp"
+
+if cmp -s "$tmp/release/floki-server" "$BIN"; then
+    echo "Already up to date."
+    exit 0
+fi
+
+cp "$BIN" "$BIN.prev"
+install -m 755 "$tmp/release/floki-server" "$BIN"
+install -m 755 "$tmp/release/floki-update" /usr/local/bin/floki-update
+systemctl restart floki-server
+
+# Any HTTP answer (the 404 for unconfigured Google sign-in included) means it started and reached the database.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 1
+    if curl -s -o /dev/null "$HEALTH"; then
+        echo "Updated and running."
+        exit 0
+    fi
+done
+
+echo "New version did not start; rolling back. Recent logs:"
+journalctl -u floki-server --no-pager -n 20 || true
+install -m 755 "$BIN.prev" "$BIN"
+systemctl restart floki-server
+exit 1

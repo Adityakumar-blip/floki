@@ -49,6 +49,22 @@ docker run -e DATABASE_URL='postgres://…?sslmode=require' -p 8787:8787 floki-s
 6. Updates: `git pull && docker compose up -d --build`. Logs: `docker compose logs -f server`.
 7. Backups (daily cron): `docker compose exec -T db pg_dump -U floki floki | gzip > ~/floki-$(date +%F).sql.gz`
 
+### Without Docker (systemd + nginx)
+
+Release builds attach `floki-server-linux-x64.tar.gz` (server binary, `floki-server.service`, `nginx-floki.conf`,
+`floki.env.example`, `floki-update`). Install once:
+
+```sh
+install -m 755 floki-server /usr/local/bin/ && install -m 755 floki-update /usr/local/bin/
+useradd --system --no-create-home --shell /usr/sbin/nologin floki
+mkdir -p /etc/floki && cp floki.env.example /etc/floki/floki.env && chmod 600 /etc/floki/floki.env   # then edit it
+cp floki-server.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now floki-server
+```
+
+**Updating:** publish a release (push a `v*` tag), then on the server run `floki-update`. It downloads the latest
+server build, restarts the service, and rolls back to the previous binary if the new one doesn't answer. Database
+migrations run automatically on start.
+
 ### Free hosting: Google Cloud Run + Neon
 
 Cloud Run gives HTTPS, scales to zero and has an always-free monthly allowance; Neon gives a free serverless

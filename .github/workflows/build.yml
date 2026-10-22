@@ -63,3 +63,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Floki-linux-x64.tar.gz
+
+  server:
+    runs-on: ubuntu-24.04
+    # Debian 12's older glibc keeps the binary runnable on any current Linux server.
+    container: rust:1-bookworm
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: floki
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - run: cargo test --locked
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@postgres:5432/floki
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir -p dist/release
+          cp target/release/floki-server deploy/floki-server.service deploy/nginx-floki.conf deploy/floki.env.example deploy/floki-update dist/release/
+          strip dist/release/floki-server
+          tar -C dist -czf dist/floki-server-linux-x64.tar.gz release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: floki-server-linux-x64
+          path: server/dist/floki-server-linux-x64.tar.gz
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: server/dist/floki-server-linux-x64.tar.gz
