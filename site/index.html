@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Floki — fast native API client</title>
-<meta name="description" content="Floki is a fast, native desktop API client built with Rust and GPUI. Import Postman collections, send REST, GraphQL, WebSocket, Socket.IO and gRPC requests, and work offline. Linux and Windows.">
+<meta name="description" content="Floki is a fast, native desktop API client built with Rust and GPUI. Import Postman collections, send REST, GraphQL, WebSocket, Socket.IO and gRPC requests, and share workspaces with your team. Linux and Windows.">
 <meta name="theme-color" content="#0F1624" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
 <meta property="og:type" content="website">
@@ -175,7 +175,7 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
 <div class="hero" id="top">
   <div class="wrap">
     <h1>Send requests. <span>Skip the Electron.</span></h1>
-    <p class="lede">Floki is a fast native API client for Linux and Windows. Built with Rust and GPUI, rendered on the GPU, and it works fully offline.</p>
+    <p class="lede">Floki is a fast native API client for Linux and Windows. Built with Rust and GPUI and rendered on the GPU. Work locally without an account, or sign in to share workspaces with your team.</p>
 
     <div class="getit">
       <a class="btn" id="dl-primary" href="https://github.com/Adityakumar-blip/floki/releases/latest">
@@ -200,7 +200,7 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
 <section id="features" class="rule">
   <div class="wrap">
     <h2>Everything a request needs</h2>
-    <p class="sub">A native client that opens in a blink, speaks the protocols you use, and keeps your data on your machine.</p>
+    <p class="sub">A native client that opens in a blink, speaks the protocols you use, and keeps your data on your machine until you choose to share it.</p>
     <ul class="feats">
       <li style="--c:var(--brand)"><h3>Native and fast</h3><p>Rust and GPUI, GPU-rendered, no Electron. Runs on Linux and Windows.</p></li>
       <li style="--c:var(--success)"><h3>Postman-compatible</h3><p>Import Postman collections (v2.0 and v2.1) and environments. Export collections in Postman v2.1 format.</p></li>
@@ -209,7 +209,7 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
       <li style="--c:var(--pink)"><h3>More than REST</h3><p>WebSocket, Socket.IO, and gRPC using server reflection or .proto files.</p></li>
       <li style="--c:var(--warning)"><h3>Code snippets</h3><p>Generate code in 10 languages: cURL, Python, JavaScript fetch, Node Axios, Go, HTTPie, PHP, Java OkHttp, C# and Rust.</p></li>
       <li style="--c:var(--link)"><h3>Organised your way</h3><p>Collections, folders, environments, globals and collection variables. History, saved response examples and request docs.</p></li>
-      <li style="--c:var(--error)"><h3>Local-first</h3><p>Everything works offline. Your data stays on your machine unless you share a workspace.</p></li>
+      <li style="--c:var(--error)"><h3>Local-first</h3><p>Local workspaces need no account and are stored only on your computer. Signing in, sharing and sync use the Floki server.</p></li>
     </ul>
   </div>
 </section>
@@ -252,7 +252,7 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
       <ul class="points">
         <li><strong>Roles you control.</strong> Invite people as Admin, Editor or Viewer.</li>
         <li><strong>Self-host the sync server.</strong> It runs on PostgreSQL, so your team's data stays on your infrastructure.</li>
-        <li><strong>Optional.</strong> Without a workspace, nothing leaves your machine.</li>
+        <li><strong>Optional.</strong> Local workspaces stay on your computer; only workspaces you share are synced to the server.</li>
       </ul>
       <a class="btn ghost" href="https://github.com/Adityakumar-blip/floki/tree/main/server">Self-host the sync server</a>
     </div>
