@@ -12,6 +12,9 @@ use gpui_kit::*;
 use std::time::Duration;
 
 const SYNC_EVERY: Duration = Duration::from_secs(3);
+/// Checking for other people's changes keeps a scale-to-zero server and database awake, so do it less often than pushing.
+// ponytail: polling; switch to server-sent events if near-instant updates or free-tier quotas start to matter.
+const PULL_EVERY: Duration = Duration::from_secs(15);
 
 /// Where a new or shared workspace lives.
 #[derive(Clone, PartialEq)]
@@ -31,6 +34,7 @@ pub enum CloudModal {
         email: Entity<InputState>,
         password: Entity<InputState>,
         signup: bool,
+        custom_server: bool,
         error: Option<String>,
         busy: bool,
     },
@@ -149,7 +153,7 @@ impl Floki {
     pub(crate) fn start_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(SYNC_EVERY).await;
-            if this.update_in(cx, |this, window, cx| this.sync_tick(window, cx)).is_err() {
+            if this.update_in(cx, |this, window, cx| this.sync_tick(false, window, cx)).is_err() {
                 break;
             }
         })
@@ -158,7 +162,9 @@ impl Floki {
 
 
     pub(crate) fn open_sign_in(&mut self, signup: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let server = self.account(cx).map(|a| a.server).unwrap_or_else(|| cloud::DEFAULT_SERVER.into());
+        let server = self.account(cx).map(|a| a.server).unwrap_or_else(cloud::default_server);
+        // Only self-hosters need to see the address; everyone else signs in to the default server.
+        let custom = server != cloud::default_server();
         let password = cx.new(|cx| InputState::new(window, cx).placeholder("Password").masked(true));
         self.modal = Some(Modal::Cloud(CloudModal::SignIn {
             server: input(window, cx, "Server URL", &server),
@@ -166,6 +172,7 @@ impl Floki {
             email: input(window, cx, "Email", ""),
             password,
             signup,
+            custom_server: custom,
             error: None,
             busy: false,
         }));
@@ -322,7 +329,7 @@ impl Floki {
         self.tabs.clear();
         self.store.update(cx, |s, cx| s.switch(&id, cx));
         self.open_request(None, crate::Request::default(), window, cx);
-        self.sync_tick(window, cx);
+        self.sync_tick(true, window, cx);
     }
 
     /// Downloads a server workspace that has no local copy yet, then opens it.
@@ -622,12 +629,13 @@ impl Floki {
     pub(crate) fn sync_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.notice = Some(if self.client(cx).is_some() { "Syncing…".into() } else { "Sign in to sync this workspace".into() });
         self.refresh_server_workspaces(window, cx);
-        self.sync_tick(window, cx);
+        self.sync_tick(true, window, cx);
         cx.notify();
     }
 
     /// Pushes local changes, or pulls the server's when they are newer. Runs every few seconds.
-    pub(crate) fn sync_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `force` checks the server now instead of waiting for the next pull.
+    pub(crate) fn sync_tick(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.syncing {
             return;
         }
@@ -665,6 +673,11 @@ impl Floki {
                 }
             });
         } else {
+            if !force && self.last_pull.is_some_and(|t| t.elapsed() < PULL_EVERY) {
+                self.syncing = false;
+                return;
+            }
+            self.last_pull = Some(std::time::Instant::now());
             let id = remote.id.clone();
             // The list carries renames and role changes too, so one request per tick covers everything.
             let job = move || {
@@ -984,8 +997,9 @@ impl Floki {
             }))
         };
         match modal {
-            CloudModal::SignIn { server, name, email, password, signup, error, busy } => {
+            CloudModal::SignIn { server, name, email, password, signup, custom_server, error, busy } => {
                 let signup = *signup;
+                let custom = *custom_server;
                 modal_card(if signup { "Create your account" } else { "Sign in to Floki" }, 440., t, cx)
                     .child(
                         div()
@@ -998,8 +1012,23 @@ impl Floki {
                             .child(modal_field(email, t))
                             .child(label("Password"))
                             .child(modal_field(password, t))
-                            .child(label("Server"))
-                            .child(modal_field(server, t))
+                            .when(custom, |d| d.child(label("Server")).child(modal_field(server, t)))
+                            .child(
+                                div()
+                                    .id("toggle-server")
+                                    .cursor_pointer()
+                                    .text_color(rgb(t.text_tertiary))
+                                    .child(if custom { "Use the Floki server" } else { "Use a self-hosted server" })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if let Some(CloudModal::SignIn { server, custom_server, .. }) = this.cloud_modal() {
+                                            *custom_server = !custom;
+                                            if custom {
+                                                server.update(cx, |s, cx| s.set_value(cloud::default_server(), window, cx));
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
                             .child(
                                 outline_button("google", "Continue with Google", t)
                                     .mt_2()

@@ -19,6 +19,7 @@ run automatically on every start. For managed Postgres append `?sslmode=require`
 | `DATABASE_URL` | required | Postgres connection URL |
 | `FLOKI_DB_MAX_CONNECTIONS` | `10` | pool size |
 | `FLOKI_BIND` | `127.0.0.1:8787` | listen address |
+| `PORT` | unset | set by hosting platforms; when `FLOKI_BIND` is unset the server listens on `0.0.0.0:$PORT` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Google sign-in is disabled unless both are set |
 
 ## Deploying
@@ -27,6 +28,45 @@ run automatically on every start. For managed Postgres append `?sslmode=require`
 - The server speaks plain HTTP: put it behind a TLS reverse proxy (Caddy, nginx) and set
   `FLOKI_BIND=0.0.0.0:8787` only when the proxy is the sole way in.
 - Back up with `pg_dump "$DATABASE_URL" > backup.sql`.
+
+### Docker
+
+```sh
+docker build -t floki-server .
+docker run -e DATABASE_URL='postgres://…?sslmode=require' -p 8787:8787 floki-server
+```
+
+### Your own VPS (Hostinger, Hetzner, DigitalOcean…)
+
+`deploy/` runs PostgreSQL, the server and Caddy (automatic HTTPS) with Docker Compose.
+
+1. Point a domain at the VPS with an A record, e.g. `api.example.com`.
+2. On the VPS (Ubuntu): install Docker (`curl -fsSL https://get.docker.com | sh`), open only SSH, 80 and 443
+   (`ufw allow OpenSSH && ufw allow 80,443/tcp && ufw enable`).
+3. `git clone https://github.com/Adityakumar-blip/floki && cd floki/server/deploy`
+4. `cp .env.example .env`, set `FLOKI_DOMAIN` and a strong `POSTGRES_PASSWORD` (`openssl rand -base64 32`).
+5. `docker compose up -d --build`. Check `https://<domain>/api/auth/google/config` answers (404 JSON until Google is set up).
+6. Updates: `git pull && docker compose up -d --build`. Logs: `docker compose logs -f server`.
+7. Backups (daily cron): `docker compose exec -T db pg_dump -U floki floki | gzip > ~/floki-$(date +%F).sql.gz`
+
+### Free hosting: Google Cloud Run + Neon
+
+Cloud Run gives HTTPS, scales to zero and has an always-free monthly allowance; Neon gives a free serverless
+Postgres (0.5 GB). Both need an account; Cloud Run also needs a billing account on file.
+
+1. Neon: create a project and copy its connection string (it already includes `sslmode=require`).
+2. Install the `gcloud` CLI, then from this folder:
+   ```sh
+   gcloud run deploy floki-server --source . --region us-central1 --allow-unauthenticated \
+     --set-env-vars "DATABASE_URL=<neon url>"
+   ```
+   Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `FLOKI_SMTP_URL` and `FLOKI_MAIL_FROM` the same way
+   (better: store secrets in Secret Manager and pass `--set-secrets`).
+3. Use the printed `https://…run.app` URL as the app's default server: set the repository variable
+   `FLOKI_SERVER` (Settings → Secrets and variables → Actions → Variables) before tagging a release.
+
+Free tiers have limits: each signed-in app checks for changes every 15 s and keeps the database awake while open,
+so a small team fits, but watch Neon's monthly compute hours and Cloud Run's request count as usage grows.
 
 ## Google sign-in
 

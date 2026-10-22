@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B4166"/>
+      <stop offset="1" stop-color="#121D33"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F1F4F8"/>
+      <stop offset="0.55" stop-color="#B9C3CF"/>
+      <stop offset="1" stop-color="#7D8898"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#C98E52"/>
+      <stop offset="1" stop-color="#8A5A2E"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g transform="translate(256 262) scale(0.88) rotate(32) translate(-256 -256)">
+    <rect x="238" y="64" width="36" height="408" rx="18" fill="url(#wood)"/>
+    <path d="M251 200 C247 260 253 320 249 396" stroke="#7A4C24" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.55"/>
+    <rect x="233" y="356" width="46" height="94" rx="10" fill="#5A3820"/>
+    <path d="M235 372 L277 358 M235 394 L277 380 M235 416 L277 402 M235 438 L277 424" stroke="#3B2413" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="256" cy="474" r="15" fill="#8C97A6"/>
+    <path d="M230 102 C192 98 150 86 106 56 C56 130 52 240 96 342 C126 262 182 200 230 172 Z" fill="url(#steel)"/>
+    <path d="M106 56 C56 130 52 240 96 342 L112 312 C80 232 84 140 122 80 Z" fill="#FFFFFF" opacity="0.9"/>
+    <path d="M150 112 C128 160 126 214 140 262" stroke="#8C97A6" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.8"/>
+    <rect x="228" y="86" width="56" height="100" rx="10" fill="#5F6979"/>
+    <rect x="236" y="96" width="40" height="80" rx="6" fill="#98A3B1"/>
+    <rect x="282" y="108" width="14" height="56" rx="5" fill="#5F6979"/>
+  </g>
+</svg>

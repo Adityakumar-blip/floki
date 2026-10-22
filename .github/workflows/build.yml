@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+# Baked into release builds as the default sync server; set it under Settings → Secrets and variables → Actions → Variables.
+env:
+  FLOKI_SERVER: ${{ vars.FLOKI_SERVER }}
+
 jobs:
   windows:
     runs-on: windows-latest

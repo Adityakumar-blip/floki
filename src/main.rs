@@ -142,6 +142,7 @@ struct Floki {
     scrolled_to: std::cell::Cell<Option<usize>>,
     /// A push or pull is in flight.
     syncing: bool,
+    last_pull: Option<std::time::Instant>,
     /// Workspaces on the server, for the Workspaces menu.
     server_workspaces: Vec<cloud::WorkspaceInfo>,
     _subs: Vec<Subscription>,
@@ -169,6 +170,7 @@ impl Floki {
             tab_scroll: ScrollHandle::new(),
             scrolled_to: Default::default(),
             syncing: false,
+            last_pull: None,
             server_workspaces: Vec::new(),
             _subs: subs,
         };
@@ -1712,7 +1714,7 @@ impl Floki {
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(rgba(0x1a1a1a99))
+                .bg(rgba(0x070b1499))
                 .occlude()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                     this.modal = None;

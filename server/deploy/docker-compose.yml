@@ -1,0 +1,51 @@
+# Floki sync server on a single VPS: PostgreSQL + floki-server + Caddy (automatic HTTPS).
+# Usage: cp .env.example .env, edit it, then `docker compose up -d --build`.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: floki
+      POSTGRES_DB: floki
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U floki -d floki"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build: ..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://floki:${POSTGRES_PASSWORD}@db:5432/floki
+      FLOKI_BIND: 0.0.0.0:8787
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      FLOKI_SMTP_URL: ${FLOKI_SMTP_URL:-}
+      FLOKI_MAIL_FROM: ${FLOKI_MAIL_FROM:-}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      FLOKI_DOMAIN: ${FLOKI_DOMAIN:?set FLOKI_DOMAIN in .env}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

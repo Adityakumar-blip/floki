@@ -7,7 +7,14 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_SERVER: &str = "http://127.0.0.1:8787";
+/// The Floki sync server: `FLOKI_SERVER` at run time, else the one baked in at build time, else a local dev server.
+pub fn default_server() -> String {
+    std::env::var("FLOKI_SERVER")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or(option_env!("FLOKI_SERVER").filter(|s| !s.trim().is_empty()).map(String::from))
+        .unwrap_or_else(|| "http://127.0.0.1:8787".into())
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct User {

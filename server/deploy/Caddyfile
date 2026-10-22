@@ -1,0 +1,5 @@
+# Caddy fetches and renews the HTTPS certificate for this domain by itself.
+{$FLOKI_DOMAIN} {
+	encode gzip
+	reverse_proxy server:8787
+}
