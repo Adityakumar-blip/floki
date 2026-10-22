@@ -1,0 +1,2 @@
+// Path is relative to the crate root, where Cargo runs build.rs.
+1 ICON "assets/floki.ico"

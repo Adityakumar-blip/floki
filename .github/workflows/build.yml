@@ -1,0 +1,61 @@
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/Floki | Out-Null
+          Copy-Item target/release/floki.exe dist/Floki/Floki.exe
+          Copy-Item README.md, assets/fonts/OFL-*.txt dist/Floki/
+          Compress-Archive dist/Floki dist/Floki-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Floki-windows-x64
+          path: dist/Floki-windows-x64.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Floki-windows-x64.zip
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libvulkan-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          mkdir -p dist/Floki
+          cp target/release/floki README.md assets/floki.svg assets/app-icon/floki-256.png assets/fonts/OFL-*.txt dist/Floki/
+          tar -C dist -czf dist/Floki-linux-x64.tar.gz Floki
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Floki-linux-x64
+          path: dist/Floki-linux-x64.tar.gz
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Floki-linux-x64.tar.gz

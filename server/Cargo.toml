@@ -1,0 +1,26 @@
+[package]
+name = "floki-server"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+argon2 = "0.5"
+rand = "0.9"
+sha2 = "0.10"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+# argon2 in an unoptimised build makes tests crawl
+[profile.dev.package."*"]
+opt-level = 3
