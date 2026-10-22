@@ -76,7 +76,7 @@ Postgres (0.5 GB). Both need an account; Cloud Run also needs a billing account 
    gcloud run deploy floki-server --source . --region us-central1 --allow-unauthenticated \
      --set-env-vars "DATABASE_URL=<neon url>"
    ```
-   Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `FLOKI_SMTP_URL` and `FLOKI_MAIL_FROM` the same way
+   Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `RESEND_API_KEY` and `FLOKI_MAIL_FROM` the same way
    (better: store secrets in Secret Manager and pass `--set-secrets`).
 3. Use the printed `https://…run.app` URL as the app's default server: set the repository variable
    `FLOKI_SERVER` (Settings → Secrets and variables → Actions → Variables) before tagging a release.
@@ -106,8 +106,12 @@ workspaces but don't receive team/workspace invites and can't be added directly 
 
 | Env var | |
 |---|---|
-| `FLOKI_SMTP_URL` | e.g. `smtps://user:pass@smtp.example.com:465`; unset = dev fallback |
-| `FLOKI_MAIL_FROM` | required with the SMTP URL, e.g. `Floki <noreply@example.com>` |
+| `RESEND_API_KEY` | API key from [Resend](https://resend.com) (`re_…`); unset = dev fallback |
+| `FLOKI_MAIL_FROM` | required with the key; an address on a domain verified in Resend, e.g. `Floki <no-reply@example.com>` |
 
-Without `FLOKI_SMTP_URL` the code is printed to the server's stdout as
-`Verification code for <email>: 123456`.
+Emails go through Resend's HTTP API over HTTPS, so outbound SMTP ports don't need to be open. To set up:
+add your domain in Resend → Domains, add the DNS records it shows (SPF, DKIM) at your DNS provider, wait until
+it says Verified, then create an API key with "Sending access".
+
+Without `RESEND_API_KEY` the code is printed to the server's stdout as
+`Verification code for <email>: 123456`. The startup line says which mode is active.

@@ -14,9 +14,10 @@ async fn main() {
     let db = floki_server::connect(&url).await.expect("connect to database and run migrations");
     let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind");
     println!(
-        "floki-server listening on http://{} (google sign-in {})",
+        "floki-server listening on http://{} (google sign-in {}, verification emails {})",
         listener.local_addr().unwrap(),
-        if google.is_some() { "enabled" } else { "disabled" }
+        if google.is_some() { "enabled" } else { "disabled" },
+        if env::var("RESEND_API_KEY").is_ok_and(|k| !k.trim().is_empty()) { "via Resend" } else { "to this log only" }
     );
     axum::serve(listener, floki_server::app(db, google)).await.unwrap();
 }

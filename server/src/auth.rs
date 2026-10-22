@@ -144,44 +144,76 @@ async fn issue_code(c: &mut PgConnection, uid: i64) -> sqlx::Result<String> {
     Ok(code)
 }
 
+/// Sends verification codes through Resend's HTTP API.
 pub struct Mail {
-    transport: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
-    from: lettre::message::Mailbox,
+    api_key: String,
+    from: String,
+    endpoint: String,
 }
 
 impl Mail {
     pub fn from_env() -> Option<Self> {
-        let url = std::env::var("FLOKI_SMTP_URL").ok().filter(|u| !u.is_empty())?;
-        let from = std::env::var("FLOKI_MAIL_FROM").expect("FLOKI_MAIL_FROM is required with FLOKI_SMTP_URL");
-        Some(Mail {
-            transport: lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(&url).expect("invalid FLOKI_SMTP_URL").build(),
-            from: from.parse().expect("invalid FLOKI_MAIL_FROM"),
-        })
+        let api_key = std::env::var("RESEND_API_KEY").ok().filter(|k| !k.trim().is_empty())?;
+        let from = std::env::var("FLOKI_MAIL_FROM")
+            .ok()
+            .filter(|f| !f.trim().is_empty())
+            .expect("FLOKI_MAIL_FROM is required with RESEND_API_KEY, e.g. Floki <no-reply@yourdomain.com>");
+        // Overridable so tests can point at a local stand-in for Resend.
+        let endpoint = std::env::var("RESEND_API_URL").unwrap_or_else(|_| "https://api.resend.com/emails".into());
+        Some(Mail { api_key: api_key.trim().into(), from, endpoint })
     }
+}
+
+fn code_email(from: &str, to: &str, code: &str) -> Value {
+    let html = format!(
+        "<div style=\"font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#0f1624\">\
+         <p style=\"font-size:16px;font-weight:600;margin:0 0 24px\">Floki</p>\
+         <p style=\"font-size:15px;margin:0 0 16px\">Your verification code:</p>\
+         <p style=\"font-size:32px;font-weight:700;letter-spacing:6px;margin:0 0 16px;color:#0b7f93\">{code}</p>\
+         <p style=\"font-size:13px;color:#55637a;margin:0\">It expires in 30 minutes. If you didn't create a Floki account, ignore this email.</p></div>"
+    );
+    json!({
+        "from": from,
+        "to": [to],
+        "subject": format!("{code} is your Floki verification code"),
+        "html": html,
+        "text": format!("Your Floki verification code is {code}. It expires in 30 minutes.\n\nIf you didn't create a Floki account, ignore this email."),
+    })
 }
 
 async fn send_code(st: &AppState, email: &str, code: &str) {
     let Some(mail) = &st.mail else {
-        // ponytail: dev fallback, no SMTP configured; the code only goes to the server log
+        // ponytail: dev fallback when RESEND_API_KEY is unset; the code only goes to the server log
         println!("Verification code for {email}: {code}");
         return;
     };
-    use lettre::AsyncTransport;
-    let msg = email.parse().ok().and_then(|to| {
-        lettre::Message::builder()
-            .from(mail.from.clone())
-            .to(to)
-            .subject("Your Floki verification code")
-            .body(format!("Your verification code is {code}. It expires in 30 minutes."))
-            .ok()
-    });
-    match msg {
-        Some(m) => {
-            if let Err(e) = mail.transport.send(m).await {
-                eprintln!("failed to send verification email to {email}: {e}");
-            }
+    let sent = st
+        .http
+        .post(&mail.endpoint)
+        .bearer_auth(&mail.api_key)
+        .json(&code_email(&mail.from, email, code))
+        .send()
+        .await;
+    match sent {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => {
+            let status = r.status();
+            eprintln!("Resend rejected the verification email to {email} ({status}): {}", r.text().await.unwrap_or_default());
         }
-        None => eprintln!("could not build verification email for {email}"),
+        Err(e) => eprintln!("could not reach Resend for {email}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn code_email_has_code_in_subject_text_and_html() {
+        let v = super::code_email("Floki <no-reply@x.dev>", "a@b.dev", "042137");
+        assert_eq!(v["to"][0], "a@b.dev");
+        assert_eq!(v["from"], "Floki <no-reply@x.dev>");
+        for field in ["subject", "html", "text"] {
+            assert!(v[field].as_str().unwrap().contains("042137"), "{field}");
+        }
     }
 }
 
