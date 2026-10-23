@@ -15,6 +15,8 @@ env:
 jobs:
   windows:
     runs-on: windows-latest
+    # A hung test would otherwise run until GitHub's 6-hour limit.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,6 +44,8 @@ jobs:
 
   linux:
     runs-on: ubuntu-24.04
+    # A hung test would otherwise run until GitHub's 6-hour limit.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libvulkan-dev
@@ -66,6 +70,7 @@ jobs:
 
   server:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     # Debian 12's older glibc keeps the binary runnable on any current Linux server.
     container: rust:1-bookworm
     services:

@@ -406,7 +406,6 @@ impl ServerCertVerifier for AcceptAnyCert {
 mod tests {
     use super::*;
     use crate::model::{KeyValue, SOCKET_IO};
-    use futures::StreamExt;
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
@@ -426,8 +425,19 @@ mod tests {
         (cmd_tx, ev_rx, worker)
     }
 
+    /// Fails instead of hanging the whole test run when an expected event never comes.
     fn next(rx: &mut futures::channel::mpsc::UnboundedReceiver<Event>) -> Event {
-        futures::executor::block_on(rx.next()).unwrap()
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match rx.try_recv() {
+                Ok(event) => return event,
+                Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                    panic!("socket worker stopped without sending the expected event")
+                }
+                Err(_) if std::time::Instant::now() < deadline => thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => panic!("timed out waiting for a socket event"),
+            }
+        }
     }
 
     fn received(text: &str, binary: bool, event: Option<&str>) -> Event {

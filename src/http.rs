@@ -589,6 +589,9 @@ mod tests {
         loop {
             let mut chunk = [0_u8; 1024];
             let n = stream.read(&mut chunk).unwrap();
+            if n == 0 {
+                break;
+            }
             bytes.extend_from_slice(&chunk[..n]);
             if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                 let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
@@ -597,7 +600,7 @@ mod tests {
                     .find_map(|l| l.strip_prefix("content-length:"))
                     .and_then(|v| v.trim().parse::<usize>().ok())
                     .unwrap_or(0);
-                if n == 0 || bytes.len() >= end + 4 + len {
+                if bytes.len() >= end + 4 + len {
                     break;
                 }
             }
@@ -753,7 +756,8 @@ mod tests {
         let response = execute(&request, &[], &Settings::default()).unwrap();
         std::fs::remove_file(&file).ok();
         assert_eq!(response.status, 200);
-        let (first, second) = (rx.recv().unwrap(), rx.recv().unwrap());
+        let wait = || rx.recv_timeout(Duration::from_secs(5)).expect("mock server got no request");
+        let (first, second) = (wait(), wait());
         assert!(!first.to_ascii_lowercase().contains("authorization:"));
         assert!(second.contains("Digest username=\"u\""), "{second}");
         assert!(second.contains("uri=\"/upload\""));
