@@ -682,14 +682,17 @@ impl Floki {
             // The list carries renames and role changes too, so one request per tick covers everything.
             let job = move || {
                 let list = client.workspaces()?;
-                let newer = list.iter().any(|w| w.id == id && w.version > remote.version);
-                let data = if newer { Some(client.workspace(&id)?) } else { None };
-                Ok::<_, String>((list, data))
+                let Some(info) = list.iter().find(|w| w.id == id) else { return Ok((list, None, true)) };
+                let data = if info.version > remote.version { Some(client.workspace(&id)?) } else { None };
+                Ok::<_, String>((list, data, false))
             };
             self.run(window, cx, job, move |this, result, window, cx| {
                 this.syncing = false;
-                let result = result.map(|(list, data)| {
+                let result = result.map(|(list, data, gone)| {
                     this.apply_server_list(list, cx);
+                    if gone {
+                        this.unlink_deleted(&local, cx);
+                    }
                     data
                 });
                 match result {
@@ -702,6 +705,19 @@ impl Floki {
                 }
             });
         }
+    }
+
+    /// The server no longer has this workspace (deleted, or the server was reset); keep it as a local one.
+    fn unlink_deleted(&mut self, local: &str, cx: &mut Context<Self>) {
+        let Some(name) = self.store.read(cx).app.workspaces.iter().find(|w| w.id == local && w.remote.is_some()).map(|w| w.name.clone()) else { return };
+        self.store.update(cx, |s, cx| {
+            s.update_app(cx, |app| {
+                if let Some(m) = app.workspaces.iter_mut().find(|w| w.id == local) {
+                    m.remote = None;
+                }
+            })
+        });
+        self.notice = Some(format!("\"{name}\" is no longer on the server, so it is now a local workspace. Use Share to upload it again."));
     }
 
     fn clear_sync_notice(&mut self) {
@@ -894,8 +910,7 @@ impl Floki {
                             .flex()
                             .flex_col()
                             .child(div().font_weight(FontWeight::SEMIBOLD).child(a.name.clone()))
-                            .child(div().text_color(rgb(t.text_secondary)).child(a.email.clone()))
-                            .child(div().text_color(rgb(t.text_tertiary)).child(a.server.clone())),
+                            .child(div().text_color(rgb(t.text_secondary)).child(a.email.clone())),
                     )
                     .child(div().h(px(1.)).my_1().bg(rgb(t.border)))
                     .when(!a.verified, |d| {

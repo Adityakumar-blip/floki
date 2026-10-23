@@ -26,19 +26,18 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory dist/Floki | Out-Null
-          Copy-Item target/release/floki.exe dist/Floki/Floki.exe
-          Copy-Item README.md, assets/fonts/OFL-*.txt dist/Floki/
-          Compress-Archive dist/Floki dist/Floki-windows-x64.zip
+          choco install innosetup --no-progress -y
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0-dev" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$version assets\floki.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: Floki-windows-x64
-          path: dist/Floki-windows-x64.zip
+          name: Floki-windows-x64-setup
+          path: dist/Floki-windows-x64-setup.exe
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Floki-windows-x64.zip
+          files: dist/Floki-windows-x64-setup.exe
 
   linux:
     runs-on: ubuntu-24.04
@@ -53,18 +52,25 @@ jobs:
       - run: cargo build --release --locked
       - name: Package
         run: |
-          mkdir -p dist/Floki
-          cp target/release/floki README.md assets/floki.svg assets/app-icon/floki-256.png assets/fonts/OFL-*.txt dist/Floki/
+          mkdir -p dist/Floki/assets
+          cp target/release/floki scripts/install-linux.sh dist/Floki/
+          cp -r assets/floki.svg assets/app-icon assets/fonts/OFL-*.txt dist/Floki/assets/
+          mv dist/Floki/install-linux.sh dist/Floki/install.sh
           tar -C dist -czf dist/Floki-linux-x64.tar.gz Floki
+          scripts/build-deb.sh ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0' }}
       - uses: actions/upload-artifact@v4
         with:
           name: Floki-linux-x64
-          path: dist/Floki-linux-x64.tar.gz
+          path: |
+            dist/Floki-linux-x64.tar.gz
+            dist/Floki-linux-x64.deb
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Floki-linux-x64.tar.gz
+          files: |
+            dist/Floki-linux-x64.tar.gz
+            dist/Floki-linux-x64.deb
 
   server:
     runs-on: ubuntu-24.04

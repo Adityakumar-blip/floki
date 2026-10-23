@@ -68,7 +68,7 @@ Install stable Rust and the Visual Studio 2022 C++ build tools with the Windows 
 
 Run `cargo build --locked` and `cargo test --locked` before committing (`.\dev.cmd check --locked` and `.\dev.cmd test --locked` on Windows).
 
-Release builds come from GitHub Actions (`.github/workflows/build.yml`): run the **Build** workflow manually or push a `v*` tag. It produces `Floki-windows-x64.zip` (a single `Floki.exe`, no installer) and `Floki-linux-x64.tar.gz`; tagged runs attach both to a GitHub release.
+Release builds come from GitHub Actions (`.github/workflows/build.yml`): run the **Build** workflow manually or push a `v*` tag. It produces `Floki-windows-x64-setup.exe` (an installer with Start menu entry and uninstaller) `Floki-linux-x64.deb` (double-click to install on Ubuntu/Debian) and `Floki-linux-x64.tar.gz` (run `./Floki/install.sh` on other distros); tagged runs attach both to a GitHub release.
 
 ## Credits
 

@@ -1,9 +1,15 @@
 #!/bin/sh
-# Builds Floki and installs it for the current user (~/.local).
+# Installs Floki for the current user (~/.local). Run from a release download, or from the repo to build first.
 set -e
-cd "$(dirname "$0")/.."
-cargo build --release --locked
-install -Dm755 target/release/floki "$HOME/.local/bin/floki"
+cd "$(dirname "$0")"
+[ -d assets ] || cd ..
+if [ -x floki ]; then
+    BIN=floki
+else
+    cargo build --release --locked
+    BIN=target/release/floki
+fi
+install -Dm755 "$BIN" "$HOME/.local/bin/floki"
 for size in 16 24 32 48 64 128 256 512; do
     install -Dm644 "assets/app-icon/floki-$size.png" "$HOME/.local/share/icons/hicolor/${size}x${size}/apps/floki.png"
 done
@@ -20,4 +26,4 @@ Categories=Development;
 StartupWMClass=floki
 DESKTOP
 gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-echo "Installed to $HOME/.local/bin/floki"
+echo "Installed. Floki is now in your app launcher."

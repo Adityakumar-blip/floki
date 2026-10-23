@@ -19,6 +19,7 @@ mod ws;
 use chrono::{Local, TimeZone};
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::TitleBar;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use kv::{KvChanged, KvEditor};
@@ -751,7 +752,7 @@ impl Floki {
         self.open_import(window, cx);
     }
 
-    fn render_header(&self, t: &Tokens, cx: &Context<Self>) -> impl IntoElement {
+    fn render_header(&self, t: &Tokens, cx: &Context<Self>) -> Div {
         let mode = t.mode;
         let dark = mode == ThemeMode::Dark;
         let settings_menu = menu(t)
@@ -1904,7 +1905,15 @@ impl Render for Floki {
             .font_family(FONT)
             .text_size(px(12.))
             .text_color(rgb(t.text))
-            .child(self.render_header(&t, cx))
+            .map(|d| {
+                let header = self.render_header(&t, cx);
+                // GNOME/Wayland won't draw a title bar, so the header doubles as one with window controls.
+                if cfg!(target_os = "linux") && matches!(window.window_decorations(), Decorations::Client { .. }) {
+                    d.child(TitleBar::new().h(px(48.)).pl_0().bg(rgb(t.bg)).border_color(rgb(t.border)).child(header.flex_1().h_full().border_b_0()))
+                } else {
+                    d.child(header)
+                }
+            })
             .child(div().flex_1().min_h_0().child(body))
             .child(self.render_status_bar(&t, cx))
             .when(self.popup.is_some(), |d| {

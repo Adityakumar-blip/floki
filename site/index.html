@@ -266,16 +266,17 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
     <div class="dl">
       <article class="card" id="card-windows">
         <h3>Windows <span class="meta" id="size-windows"></span></h3>
-        <p class="file">Floki-windows-x64.zip</p>
-        <a class="btn" id="dl-windows" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-windows-x64.zip">Download for Windows</a>
-        <p>Unzip and run <code>Floki.exe</code>.</p>
+        <p class="file">Floki-windows-x64-setup.exe</p>
+        <a class="btn" id="dl-windows" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-windows-x64-setup.exe">Download for Windows</a>
+        <p>Run the installer. Floki is added to the Start menu.</p>
       </article>
       <article class="card" id="card-linux">
         <h3>Linux <span class="meta" id="size-linux"></span></h3>
-        <p class="file">Floki-linux-x64.tar.gz</p>
-        <a class="btn" id="dl-linux" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.tar.gz">Download for Linux</a>
+        <p class="file">Floki-linux-x64.deb</p>
+        <a class="btn" id="dl-linux" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.deb">Download for Linux</a>
+        <p>Double-click to install on Ubuntu or Debian. On other distros, download <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.tar.gz">the .tar.gz</a> and run:</p>
         <div class="codewrap">
-          <pre class="code" id="linux-cmd" tabindex="0">tar -xzf Floki-linux-x64.tar.gz && ./Floki/floki</pre>
+          <pre class="code" id="linux-cmd" tabindex="0">tar -xzf Floki-linux-x64.tar.gz && ./Floki/install.sh</pre>
           <button class="copy" type="button" id="copy-btn" aria-label="Copy Linux install command">Copy</button>
         </div>
       </article>
@@ -300,7 +301,7 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
 (function(){
   var REPO='Adityakumar-blip/floki';
   var BASE='https://github.com/'+REPO+'/releases/latest/download/';
-  var ASSETS={windows:'Floki-windows-x64.zip',linux:'Floki-linux-x64.tar.gz'};
+  var ASSETS={windows:'Floki-windows-x64-setup.exe',linux:'Floki-linux-x64.deb'};
   var NAMES={windows:'Windows',linux:'Linux'};
   var $=function(id){return document.getElementById(id)};
 
