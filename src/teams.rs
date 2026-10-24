@@ -799,6 +799,22 @@ impl Floki {
                     }
                     _ => {}
                 },
+                Tab::Runner(view) => {
+                    if ws.scripts_of(view.read(cx).target).is_none() {
+                        remove.push(ix);
+                    }
+                }
+                Tab::Scripts { id, pre, post, .. } => match ws.scripts_of(*id) {
+                    None => remove.push(ix),
+                    Some((_, scripts)) => {
+                        for (editor, text) in [(pre, &scripts.pre_request), (post, &scripts.test)] {
+                            if editor.read(cx).value().as_ref() != text.as_str() {
+                                let text = text.clone();
+                                editor.update(cx, |s, cx| s.set_value(text, window, cx));
+                            }
+                        }
+                    }
+                },
                 Tab::Example { request, ix: i, .. } => {
                     if ws.request(*request).and_then(|(_, r)| r.examples.get(*i)).is_none() {
                         remove.push(ix);

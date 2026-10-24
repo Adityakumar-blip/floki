@@ -7,6 +7,7 @@ VERSION=${1#v}
 ROOT=dist/deb
 rm -rf "$ROOT"
 install -Dm755 target/release/floki "$ROOT/usr/bin/floki"
+install -Dm755 target/release/floki-cli "$ROOT/usr/bin/floki-cli"
 for size in 16 24 32 48 64 128 256 512; do
     install -Dm644 "assets/app-icon/floki-$size.png" "$ROOT/usr/share/icons/hicolor/${size}x${size}/apps/floki.png"
 done

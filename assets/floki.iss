@@ -18,6 +18,7 @@ SolidCompression=yes
 
 [Files]
 Source: "..\target\release\floki.exe"; DestDir: "{app}"; DestName: "Floki.exe"
+Source: "..\target\release\floki-cli.exe"; DestDir: "{app}"
 Source: "fonts\OFL-*.txt"; DestDir: "{app}"
 
 [Tasks]

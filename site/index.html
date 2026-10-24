@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Floki — fast native API client</title>
-<meta name="description" content="Floki is a fast, native desktop API client built with Rust and GPUI. Import Postman collections, send REST, GraphQL, WebSocket, Socket.IO and gRPC requests, and share workspaces with your team. Linux and Windows.">
+<title>Floki, the native API client</title>
+<meta name="description" content="Floki is a fast, native API client for Linux and Windows, built in Rust. Runs Postman collections and pm.* scripts, streams server-sent events and AI responses, speaks GraphQL, gRPC, WebSocket, Socket.IO and MQTT, and works without an account.">
 <meta name="theme-color" content="#0F1624" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Floki — fast native API client">
-<meta property="og:description" content="A native, GPU-rendered API client for Linux and Windows. No Electron. Postman-compatible imports, local-first, self-hostable team sync.">
+<meta property="og:title" content="Floki, the native API client">
+<meta property="og:description" content="A native, GPU-rendered API client for Linux and Windows. Runs your Postman collections and scripts, streams AI responses, and keeps your data on your machine.">
 <meta property="og:image" content="assets/floki-256.png">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="assets/floki.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/floki-256.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
   color-scheme:dark light;
@@ -24,135 +24,152 @@
   --border:#22304A;--border-strong:#2C3C5A;
   --text:#E8EDF5;--text-2:#9AA8BE;--text-3:#7A8AA5;
   --brand:#E3A15A;--primary:#0B7F93;--primary-hover:#096C7D;--link:#5CC8DB;
-  --success:#5BD69A;--warning:#F2C46D;--error:#F28B82;--info:#7CB4F8;--purple:#B79CF0;--pink:#F07FBF;
+  --get:#5BD69A;--post:#F2C46D;--info:#7CB4F8;--purple:#B79CF0;--pink:#F07FBF;--no:#F28B82;
   --on-primary:#FFFFFF;
-  --glow-a:rgba(43,65,102,.55);--glow-b:rgba(227,161,90,.10);
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --sans:"Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
 @media (prefers-color-scheme:light){
   :root{
-    --bg:#FFFFFF;--surface:#F6F8FB;--raised:#EEF2F7;--hover:#EBF0F6;
-    --border:#E3E8F0;--border-strong:#D5DCE7;
-    --text:#0F1624;--text-2:#55637A;--text-3:#6B778C;
-    --brand:#C47F35;--primary:#0B7F93;--primary-hover:#096C7D;--link:#0B6F80;
-    --success:#0E7A43;--warning:#9A6A00;--error:#B4231A;--info:#1D5FBF;--purple:#6B3FB0;--pink:#A3166B;
-    --glow-a:rgba(43,65,102,.10);--glow-b:rgba(196,127,53,.10);
+    --bg:#FFFFFF;--surface:#F6F8FB;--raised:#EEF2F7;--hover:#E8EEF5;
+    --border:#E3E8F0;--border-strong:#D0D8E4;
+    --text:#0F1624;--text-2:#4E5C73;--text-3:#66748A;
+    --brand:#B5702A;--link:#0B6F80;
+    --get:#0E7A43;--post:#8A5E00;--info:#1D5FBF;--purple:#6B3FB0;--pink:#A3166B;--no:#B4231A;
   }
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.6 var(--sans);font-optical-sizing:auto;-webkit-font-smoothing:antialiased}
 a{color:var(--link);text-underline-offset:3px}
 a:hover{text-decoration-thickness:2px}
 :focus-visible{outline:2px solid var(--link);outline-offset:3px;border-radius:4px}
-.wrap{max-width:1120px;margin:0 auto;padding:0 16px}
+.wrap{max-width:1160px;margin:0 auto;padding:0 16px}
 .skip{position:absolute;left:-999px;top:8px;background:var(--raised);color:var(--text);padding:8px 12px;border-radius:6px;z-index:10}
 .skip:focus{left:16px}
-code,pre,.mono{font-family:var(--mono)}
+code,pre{font-family:var(--mono)}
+code{font-size:.88em;background:var(--raised);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
-/* header */
-header.site{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
-header.site .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
-.brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;font-weight:700;font-size:18px;letter-spacing:-.01em}
+header.site{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+header.site .wrap{display:flex;align-items:center;justify-content:space-between;height:62px;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;color:var(--text);text-decoration:none;font-weight:700;font-size:20px;letter-spacing:-.02em}
 .brand img{width:28px;height:28px;border-radius:7px}
-nav ul{display:flex;gap:4px;list-style:none;margin:0;padding:0}
+nav ul{display:flex;gap:2px;list-style:none;margin:0;padding:0}
 nav a{display:block;padding:8px 12px;border-radius:8px;color:var(--text-2);text-decoration:none;font-size:15px;font-weight:500}
 nav a:hover{color:var(--text);background:var(--hover)}
 
-/* hero */
-.hero{position:relative;overflow:hidden;padding:72px 0 56px;background:
-  radial-gradient(900px 420px at 15% -10%,var(--glow-a),transparent 70%),
-  radial-gradient(600px 300px at 90% 10%,var(--glow-b),transparent 70%)}
-.hero h1{font-size:clamp(40px,7.2vw,84px);line-height:1;letter-spacing:-.035em;font-weight:800;margin:0 0 22px;max-width:14ch}
-.hero h1 span{color:var(--text-2);font-weight:700}
-.lede{font-size:clamp(17px,2.2vw,20px);color:var(--text-2);max-width:56ch;margin:0 0 32px}
-.getit{display:inline-flex;flex-direction:column;gap:12px;max-width:100%}
-.btn{display:inline-flex;align-items:center;gap:12px;background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600;font-size:17px;padding:15px 24px;border-radius:12px;border:1px solid transparent;transition:background .15s,transform .15s;box-shadow:0 8px 28px -10px var(--primary)}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600;font-size:17px;padding:14px 22px;border-radius:12px;border:1px solid transparent;transition:background .15s}
 .btn:hover{background:var(--primary-hover);text-decoration:none}
-.btn:active{transform:translateY(1px)}
+.btn.quiet{background:transparent;color:var(--text);border-color:var(--border-strong)}
+.btn.quiet:hover{background:var(--hover)}
 .btn svg{flex:none}
-.btn[aria-disabled=true]{background:var(--raised);color:var(--text-2);box-shadow:none;border-color:var(--border-strong);pointer-events:none}
-.btn.ghost{background:transparent;color:var(--text);border-color:var(--border-strong);box-shadow:none;font-size:15px;padding:10px 16px}
-.btn.ghost:hover{background:var(--hover)}
-.meta{font:13px/1.5 var(--mono);color:var(--text-3);margin:0}
-.meta b{color:var(--text-2);font-weight:500}
-.others{font-size:14px;color:var(--text-3);display:flex;flex-wrap:wrap;gap:4px 16px;margin:0}
-.others a{color:var(--link)}
-.soon{color:var(--warning);font-size:14px;margin:0}
 
-.shot{margin:56px 0 0;border:1px solid var(--border-strong);border-radius:14px;background:var(--surface);overflow:hidden;box-shadow:0 40px 80px -30px rgba(0,0,0,.55)}
-.shot .bar{display:flex;gap:7px;padding:11px 14px;border-bottom:1px solid var(--border);background:var(--raised)}
-.shot .bar i{width:10px;height:10px;border-radius:50%;background:var(--border-strong)}
-.shot picture,.shot img{display:block;width:100%;height:auto;aspect-ratio:1400/900;background:linear-gradient(160deg,var(--surface),var(--raised));color:var(--text-3);font-size:13px}
+/* Hero: the headline sits beside a request that streams its answer. */
+.hero{padding:76px 0 64px;border-bottom:1px solid var(--border);background:radial-gradient(1000px 520px at 0% -20%,color-mix(in srgb,var(--primary) 22%,transparent),transparent 70%)}
+.hero .wrap{display:grid;gap:48px;grid-template-columns:1fr}
+@media (min-width:980px){.hero .wrap{grid-template-columns:1.02fr .98fr;align-items:center}}
+.hero h1{font-size:clamp(44px,6.6vw,86px);line-height:.95;letter-spacing:-.045em;font-weight:800;margin:0 0 24px;font-variation-settings:"opsz" 96}
+.lede{font-size:clamp(18px,2.1vw,21px);color:var(--text-2);max-width:40ch;margin:0 0 32px;line-height:1.5}
+.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px}
+.release{font-size:14px;color:var(--text-3);margin:0}
+.release a{color:var(--link)}
+.soon{color:var(--post);font-size:14px;margin:6px 0 0}
 
-/* sections */
-section{padding:80px 0}
-h2{font-size:clamp(28px,4vw,42px);line-height:1.1;letter-spacing:-.025em;font-weight:700;margin:0 0 14px;max-width:20ch}
-.sub{color:var(--text-2);max-width:58ch;margin:0 0 44px}
-.rule{border-top:1px solid var(--border)}
+.exchange{background:var(--surface);border:1px solid var(--border-strong);border-radius:16px;overflow:hidden;box-shadow:0 30px 70px -32px rgba(0,0,0,.6);min-width:0}
+.ex-line{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border);font:500 14px var(--mono);min-width:0}
+.ex-method{color:var(--post);font-weight:600}
+.ex-url{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ex-body{padding:12px 16px;border-bottom:1px solid var(--border);font:13px/1.55 var(--mono);color:var(--text-2);white-space:pre-wrap}
+.ex-body b{color:var(--link);font-weight:400}
+.ex-tabs{display:flex;align-items:center;gap:6px;padding:12px 16px 0;font-size:14px}
+.ex-tabs span{padding:4px 10px;border-radius:6px;color:var(--text-2)}
+.ex-tabs span.on{background:var(--hover);color:var(--text)}
+.ex-status{margin-left:auto;font:13px var(--mono);color:var(--get);white-space:nowrap}
+.ex-answer{padding:16px 16px 20px;min-height:168px;font-size:17px;line-height:1.55}
+.ex-answer strong{font-weight:700}
+.ex-caret{display:inline-block;width:8px;height:1.1em;vertical-align:-3px;background:var(--brand);margin-left:2px;animation:blink 1s steps(1) infinite}
+.ex-caret[hidden]{display:none}
+@keyframes blink{50%{opacity:0}}
+.ex-foot{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 16px;border-top:1px solid var(--border);font:12px var(--mono);color:var(--text-3)}
 
-.feats{display:grid;grid-template-columns:1fr;margin:0;padding:0;list-style:none;border-top:1px solid var(--border)}
-.feats li{padding:26px 0;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr;gap:6px}
-.feats h3{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}
-.feats h3::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c,var(--brand));margin-right:10px;vertical-align:1px}
-.feats p{margin:0;color:var(--text-2);max-width:62ch}
-@media (min-width:760px){
-  .feats{grid-template-columns:1fr 1fr;column-gap:56px}
-  .feats li:nth-last-child(2):nth-child(odd){border-bottom-color:var(--border)}
-}
+section{padding:88px 0}
+section+section{border-top:1px solid var(--border)}
+h2{font-size:clamp(32px,4.4vw,52px);line-height:1.02;letter-spacing:-.035em;font-weight:700;margin:0 0 16px;max-width:18ch}
+.sub{color:var(--text-2);max-width:58ch;margin:0 0 48px;font-size:19px}
 
-/* protocol strip */
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 28px;padding:0;list-style:none}
-.chips li{font:500 13px/1 var(--mono);padding:9px 12px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface);color:var(--c)}
-.group{margin-bottom:34px}
-.group h3{font-size:15px;font-weight:600;margin:0 0 12px;color:var(--text-2)}
+/* New in this release: one dense list, not cards. */
+.new{display:grid;grid-template-columns:1fr;gap:0;margin:0;padding:0;list-style:none;border-top:1px solid var(--border)}
+.new li{display:grid;grid-template-columns:1fr;gap:4px 32px;padding:22px 0;border-bottom:1px solid var(--border)}
+@media (min-width:760px){.new li{grid-template-columns:260px 1fr}}
+.new h3{margin:0;font-size:20px;font-weight:600;letter-spacing:-.015em}
+.new p{margin:0;color:var(--text-2);max-width:62ch}
 
-/* teams */
-.split{display:grid;gap:40px;grid-template-columns:1fr}
-@media (min-width:860px){.split{grid-template-columns:1.1fr .9fr;align-items:start;gap:64px}}
-.roles{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:6px 20px}
-.roles div{display:flex;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--border)}
-.roles div:last-child{border:0}
-.roles dt{font:500 14px var(--mono);color:var(--brand)}
-.roles dd{margin:0;color:var(--text-2);font-size:15px;text-align:right}
-.roles{margin:0}
-.points{margin:0 0 24px;padding-left:20px;color:var(--text-2)}
-.points li{margin-bottom:8px}
-.points strong{color:var(--text);font-weight:600}
+/* Feature rows: words on one side, the real thing on the other. */
+.row{display:grid;gap:28px;grid-template-columns:1fr;align-items:center;padding:56px 0;border-top:1px solid var(--border)}
+.row:first-of-type{border-top:0;padding-top:0}
+@media (min-width:900px){.row{grid-template-columns:.9fr 1.1fr;gap:64px}.row.flip>:first-child{order:2}}
+.row h3{font-size:clamp(26px,3vw,34px);letter-spacing:-.03em;line-height:1.08;margin:0 0 14px;font-weight:700}
+.row p{color:var(--text-2);margin:0 0 14px;max-width:48ch}
+.row ul{margin:0;padding-left:20px;color:var(--text-2)}
+.row li{margin-bottom:6px}
+.code{background:var(--surface);border:1px solid var(--border-strong);border-radius:14px;padding:18px 20px;font:13.5px/1.65 var(--mono);color:var(--text);overflow-x:auto;white-space:pre;margin:0;min-width:0}
+.code .c{color:var(--text-3)}.code .s{color:var(--get)}.code .k{color:var(--purple)}.code .f{color:var(--link)}
+.code .ok{color:var(--get)}.code .bad{color:var(--no)}.code .dim{color:var(--text-3)}.code .b{font-weight:600}
+.shot{margin:0;border:1px solid var(--border-strong);border-radius:14px;overflow:hidden;background:var(--surface);min-width:0}
+.shot img{display:block;width:100%;height:auto;aspect-ratio:1400/900}
+.tags{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
+.tags li{font:500 14px/1 var(--mono);padding:10px 13px;border-radius:9px;border:1px solid var(--border-strong);background:var(--surface);color:var(--c,var(--text))}
 
-/* downloads */
+/* Comparison */
+.compare{width:100%;border-collapse:collapse;font-size:16px}
+.compare th,.compare td{text-align:left;padding:16px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+.compare thead th{font-size:18px;font-weight:700;border-bottom:1px solid var(--border-strong)}
+.compare thead th.us{color:var(--brand)}
+.compare tbody th{font-weight:500;color:var(--text);width:30%}
+.compare td{color:var(--text-2);width:35%}
+.compare td.us{background:color-mix(in srgb,var(--primary) 7%,transparent);color:var(--text)}
+.mark{display:inline-flex;width:20px;height:20px;border-radius:50%;align-items:center;justify-content:center;margin-right:8px;vertical-align:-4px;flex:none}
+.mark.yes{background:color-mix(in srgb,var(--get) 20%,transparent);color:var(--get)}
+.mark.no{background:color-mix(in srgb,var(--no) 18%,transparent);color:var(--no)}
+.mark.part{background:color-mix(in srgb,var(--post) 20%,transparent);color:var(--post)}
+.tablewrap{overflow-x:auto;margin:0 -16px;padding:0 16px}
+.fine{font-size:14px;color:var(--text-3);margin:24px 0 0;max-width:80ch}
+@media (max-width:640px){.compare{font-size:15px}.compare th,.compare td{padding:12px 10px}.compare tbody th{width:auto}}
+
+/* Teams */
+.points{margin:0;padding:0;list-style:none;border-top:1px solid var(--border)}
+.points li{padding:18px 0;border-bottom:1px solid var(--border);color:var(--text-2);max-width:72ch}
+.points strong{color:var(--text);font-weight:600;display:block;font-size:19px;margin-bottom:2px}
+
+/* Downloads */
 .dl{display:grid;gap:20px;grid-template-columns:1fr}
-@media (min-width:800px){.dl{grid-template-columns:1fr 1fr}}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:26px;display:flex;flex-direction:column;gap:14px;min-width:0}
+@media (min-width:860px){.dl{grid-template-columns:1fr 1fr}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:14px;min-width:0}
 .card.active{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
-.card h3{margin:0;font-size:22px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.card h3{margin:0;font-size:26px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:12px}
+.card h3 small{font:13px var(--mono);color:var(--text-3);font-weight:400}
 .card .file{font:13px var(--mono);color:var(--text-3);margin:0;overflow-wrap:anywhere}
 .card .btn{align-self:flex-start;font-size:16px;padding:12px 20px}
 .card p{margin:0;color:var(--text-2)}
-.code{position:relative;background:var(--bg);border:1px solid var(--border-strong);border-radius:10px;padding:14px 76px 14px 14px;font:13px/1.55 var(--mono);color:var(--text);overflow-x:auto;white-space:pre;margin:0}
-.copy{position:absolute;top:8px;right:8px;font:500 12px var(--sans);background:var(--raised);color:var(--text);border:1px solid var(--border-strong);border-radius:7px;padding:6px 10px;cursor:pointer}
+.cmd{position:relative}
+.cmd pre{background:var(--bg);border:1px solid var(--border-strong);border-radius:10px;padding:14px 84px 14px 14px;font:13px/1.55 var(--mono);color:var(--text);overflow-x:auto;white-space:pre;margin:0}
+.copy{position:absolute;top:8px;right:8px;font:500 13px var(--sans);background:var(--raised);color:var(--text);border:1px solid var(--border-strong);border-radius:7px;padding:6px 10px;cursor:pointer}
 .copy:hover{background:var(--hover)}
-.codewrap{position:relative}
-.codewrap .code{padding-right:76px}
-.note{margin-top:28px;color:var(--text-2);font-size:15px}
-.note .mac{color:var(--warning)}
+.cli{margin-top:28px;color:var(--text-2)}
 
-footer{border-top:1px solid var(--border);padding:36px 0 48px;color:var(--text-3);font-size:14px}
+footer{border-top:1px solid var(--border);padding:36px 0 48px;color:var(--text-3);font-size:15px}
 footer .wrap{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;justify-content:space-between}
-footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+footer ul{display:flex;flex-wrap:wrap;gap:20px;list-style:none;margin:0;padding:0}
 
-@media (max-width:520px){
+@media (max-width:560px){
+  nav li.hide-sm{display:none}
   nav a{padding:8px 8px;font-size:14px}
-  .hero{padding-top:48px}
-  .btn{font-size:16px;padding:14px 18px}
-  section{padding:56px 0}
+  .hero{padding-top:44px}
+  section{padding:60px 0}
+  .ex-body{display:none}
 }
-@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-.hero .wrap>*{animation:rise .6s ease-out both}
-.hero .wrap>.lede{animation-delay:.08s}.hero .wrap>.getit{animation-delay:.16s}.hero .wrap>.shot{animation-delay:.28s}
 </style>
 </head>
 <body>
@@ -163,9 +180,10 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
     <a class="brand" href="#top" aria-label="Floki home"><img src="assets/floki.svg" width="28" height="28" alt="">Floki</a>
     <nav aria-label="Primary">
       <ul>
-        <li><a href="#features">Features</a></li>
+        <li class="hide-sm"><a href="#features">Features</a></li>
+        <li><a href="#compare">Compare</a></li>
         <li><a href="#download">Download</a></li>
-        <li><a href="https://github.com/Adityakumar-blip/floki">GitHub</a></li>
+        <li class="hide-sm"><a href="https://github.com/Adityakumar-blip/floki">GitHub</a></li>
       </ul>
     </nav>
   </div>
@@ -174,123 +192,236 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
 <main id="main">
 <div class="hero" id="top">
   <div class="wrap">
-    <h1>Send requests. <span>Skip the Electron.</span></h1>
-    <p class="lede">Floki is a fast native API client for Linux and Windows. Built with Rust and GPUI and rendered on the GPU. Work locally without an account, or sign in to share workspaces with your team.</p>
-
-    <div class="getit">
-      <a class="btn" id="dl-primary" href="https://github.com/Adityakumar-blip/floki/releases/latest">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
-        <span id="dl-label">Download Floki</span>
-      </a>
-      <p class="meta" id="dl-meta">Latest release</p>
-      <p class="soon" id="dl-soon" hidden>macOS build coming soon.</p>
-      <p class="others" id="dl-others"></p>
+    <div>
+      <h1>The API client that isn't a browser.</h1>
+      <p class="lede">Floki is a native app for Linux and Windows, written in Rust and drawn on your GPU. It imports your Postman collections and runs their scripts, streams AI responses as they arrive, and works without an account.</p>
+      <div class="actions">
+        <a class="btn" id="dl-primary" href="https://github.com/Adityakumar-blip/floki/releases/latest">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
+          <span id="dl-label">Download Floki</span>
+        </a>
+        <a class="btn quiet" href="#compare">Compare with Postman</a>
+      </div>
+      <p class="release" id="dl-meta">Free for Linux and Windows.</p>
+      <p class="soon" id="dl-soon" hidden>A macOS build is on the way. Meanwhile, the Linux and Windows builds are below.</p>
     </div>
 
-    <figure class="shot">
-      <div class="bar" aria-hidden="true"><i></i><i></i><i></i></div>
-      <picture>
-        <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
-        <img src="assets/screenshot-dark.png" width="1400" height="900" alt="Floki window showing a request builder and formatted response" fetchpriority="high">
-      </picture>
+    <figure class="exchange" aria-label="A streaming chat completion request in Floki">
+      <div class="ex-line"><span class="ex-method">POST</span><span class="ex-url">{{baseUrl}}/v1/chat/completions</span></div>
+      <div class="ex-body">{ <b>"stream"</b>: true, <b>"messages"</b>: [{ <b>"role"</b>: "user",
+  <b>"content"</b>: "Why do API clients need to be fast?" }] }</div>
+      <div class="ex-tabs"><span class="on">Assembled</span><span>Events</span><span class="ex-status" id="ex-status">Streaming</span></div>
+      <div class="ex-answer" id="ex-answer" aria-live="off"><span id="ex-text"></span><span class="ex-caret" id="ex-caret"></span></div>
+      <div class="ex-foot"><span id="ex-events">0 events</span><span>first event after 212 ms</span><span>OpenAI format</span><span id="ex-tokens"></span></div>
     </figure>
   </div>
 </div>
 
-<section id="features" class="rule">
+<section id="new">
   <div class="wrap">
-    <h2>Everything a request needs</h2>
-    <p class="sub">A native client that opens in a blink, speaks the protocols you use, and keeps your data on your machine until you choose to share it.</p>
-    <ul class="feats">
-      <li style="--c:var(--brand)"><h3>Native and fast</h3><p>Rust and GPUI, GPU-rendered, no Electron. Runs on Linux and Windows.</p></li>
-      <li style="--c:var(--success)"><h3>Postman-compatible</h3><p>Import Postman collections (v2.0 and v2.1) and environments. Export collections in Postman v2.1 format.</p></li>
-      <li style="--c:var(--info)"><h3>Requests, fully equipped</h3><p>Params, headers and bodies: form-data with files, x-www-form-urlencoded, raw JSON, XML, HTML, Text or JS with Beautify, GraphQL, and binary.</p></li>
-      <li style="--c:var(--purple)"><h3>Auth built in</h3><p>Basic, Bearer, Digest, OAuth 2.0 (client credentials and password), AWS Signature v4 and API key. Proxy and client certificates too.</p></li>
-      <li style="--c:var(--pink)"><h3>More than REST</h3><p>WebSocket, Socket.IO, and gRPC using server reflection or .proto files.</p></li>
-      <li style="--c:var(--warning)"><h3>Code snippets</h3><p>Generate code in 10 languages: cURL, Python, JavaScript fetch, Node Axios, Go, HTTPie, PHP, Java OkHttp, C# and Rust.</p></li>
-      <li style="--c:var(--link)"><h3>Organised your way</h3><p>Collections, folders, environments, globals and collection variables. History, saved response examples and request docs.</p></li>
-      <li style="--c:var(--error)"><h3>Local-first</h3><p>Local workspaces need no account and are stored only on your computer. Signing in, sharing and sync use the Floki server.</p></li>
+    <h2>New in 0.4</h2>
+    <p class="sub">The biggest release so far: scripts, a runner, a command line and more ways to connect.</p>
+    <ul class="new">
+      <li><h3>Scripts and tests</h3><p>Pre-request and post-response scripts on requests, folders and collections, with a simple <code>test</code> and <code>expect</code> API. Most Postman <code>pm.*</code> scripts run as they are, including ones that use <code>pm.sendRequest</code> and <code>crypto-js</code>.</p></li>
+      <li><h3>Collection runner</h3><p>Run a collection or folder with iterations, delays and a CSV or JSON data file. Jump between requests with <code>setNextRequest</code>.</p></li>
+      <li><h3>Command line for CI</h3><p><code>floki-cli run collection.json</code> prints every test and exits non-zero on failure. One file to download, no Node.js, no account.</p></li>
+      <li><h3>Server-sent events</h3><p>Event streams show up live. AI responses from OpenAI, Anthropic and Gemini style APIs are joined into readable Markdown, with thinking and token counts.</p></li>
+      <li><h3>MQTT and Socket.IO events</h3><p>Connect to MQTT brokers, subscribe and publish with QoS and retain. Choose which Socket.IO events to listen to.</p></li>
+      <li><h3>More sign-in methods</h3><p>OAuth 2.0 authorization code with PKCE through your browser, JWT Bearer, OAuth 1.0, Hawk and NTLM.</p></li>
+      <li><h3>Cookies, preview and search</h3><p>A cookie jar that behaves like a browser's, HTML and image previews, and <code>Ctrl+K</code> to search everything in your workspace.</p></li>
     </ul>
   </div>
 </section>
 
-<section class="rule" aria-labelledby="formats">
+<section id="features">
   <div class="wrap">
-    <h2 id="formats">Bring what you already have</h2>
-    <p class="sub">Import from the formats your team already uses, then export collections back out as Postman v2.1.</p>
-    <div class="group">
-      <h3>Import</h3>
-      <ul class="chips">
-        <li style="--c:var(--success)">Postman collections v2.0 / v2.1</li>
-        <li style="--c:var(--success)">Postman environments</li>
-        <li style="--c:var(--warning)">cURL</li>
+    <h2>Built for how you test APIs today</h2>
+    <p class="sub">Every feature below is in the free download. Nothing is behind a sign-in.</p>
+
+    <div class="row">
+      <div>
+        <h3>Tests that read like tests</h3>
+        <p>Write checks in plain JavaScript with <code>test</code> and <code>expect</code>, or keep the <code>pm.test</code> scripts you already have; most run without changes. Results show in a Tests tab next to the response, and logs in a Console tab.</p>
+        <ul>
+          <li>Save tokens and IDs into environments for the next request</li>
+          <li>Sign requests with <code>crypto-js</code> in a pre-request script</li>
+          <li>Async tests, top-level <code>await</code> and <code>pm.sendRequest</code></li>
+        </ul>
+      </div>
+<pre class="code" aria-label="Example post-response script"><span class="c">// Post-response script</span>
+<span class="f">test</span>(<span class="s">"returns the new user"</span>, () => {
+  <span class="f">expect</span>(res.status).<span class="f">toBe</span>(<span class="k">201</span>);
+  <span class="f">expect</span>(res.<span class="f">json</span>()).<span class="f">toHaveProperty</span>(<span class="s">"id"</span>);
+});
+env.<span class="f">set</span>(<span class="s">"userId"</span>, res.<span class="f">json</span>().id);
+
+<span class="c">// Postman-style scripts work too</span>
+pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () => {
+  pm.response.to.have.<span class="f">status</span>(<span class="k">201</span>);
+});</pre>
+    </div>
+
+    <div class="row flip">
+      <div>
+        <h3>The same run on your laptop and in CI</h3>
+        <p>The collection runner sends every request in order, with your data file and scripts. <code>floki-cli</code> does the same in a pipeline and fails the build when a test fails.</p>
+        <ul>
+          <li>Works with collections exported from Floki or Postman</li>
+          <li>Environment and globals files, JSON reports</li>
+          <li>A single binary for Linux and Windows</li>
+        </ul>
+      </div>
+<pre class="code" aria-label="floki-cli output"><span class="dim">$</span> floki-cli run api.json -e staging.json -d users.csv
+
+<span class="b">Demo API</span>
+
+<span class="dim">Iteration 1/2</span>
+→ <span class="b">GET</span> Get user  200 OK · 55 ms
+  <span class="ok">✓</span> Status code is 200
+  <span class="ok">✓</span> Name matches data
+→ <span class="b">GET</span> Missing  404 Not Found · 2 ms
+  <span class="ok">✓</span> is 404
+  <span class="bad">✗</span> wrong on purpose — <span class="bad">expected 404 to be 200</span>
+<span class="dim">Iteration 2/2</span>
+<span class="dim">  …</span>
+
+<span class="bad">4 requests, 2 failed · 8 tests, 2 failed · 1.0 s</span>
+<span class="dim">$</span> echo $?
+1</pre>
+    </div>
+
+    <div class="row">
+      <div>
+        <h3>Every protocol in one window</h3>
+        <p>REST and GraphQL with every body type, plus long-lived connections with a live message log you can filter.</p>
+        <ul class="tags" aria-label="Protocols">
+          <li style="--c:var(--get)">HTTP</li>
+          <li style="--c:var(--pink)">GraphQL</li>
+          <li style="--c:var(--post)">gRPC</li>
+          <li style="--c:var(--info)">WebSocket</li>
+          <li style="--c:var(--purple)">Socket.IO</li>
+          <li style="--c:var(--link)">MQTT</li>
+          <li style="--c:var(--brand)">Server-sent events</li>
+        </ul>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
+          <img src="assets/screenshot-dark.png" width="1400" height="900" alt="Floki with a collection tree, a POST request with a JSON body, and its formatted response" loading="lazy">
+        </picture>
+      </figure>
+    </div>
+
+    <div class="row flip">
+      <div>
+        <h3>Bring what you already have</h3>
+        <p>Import Postman collections with their auth, scripts and examples, environments, OpenAPI, Swagger, RAML, WSDL or a pasted cURL command. Export collections back to Postman v2.1.</p>
+        <p>Sign in to APIs with Basic, Bearer, Digest, API key, OAuth 2.0 (including the browser sign-in flow with PKCE), OAuth 1.0, JWT, AWS Signature, Hawk or NTLM.</p>
+      </div>
+      <ul class="tags" aria-label="Import formats">
+        <li style="--c:var(--get)">Postman v2.0 and v2.1</li>
+        <li style="--c:var(--get)">Postman environments</li>
+        <li style="--c:var(--post)">cURL</li>
         <li style="--c:var(--info)">OpenAPI 3</li>
-        <li style="--c:var(--info)">Swagger 2 (JSON / YAML)</li>
+        <li style="--c:var(--info)">Swagger 2</li>
         <li style="--c:var(--purple)">RAML 1.0</li>
         <li style="--c:var(--pink)">WSDL</li>
       </ul>
     </div>
-    <div class="group">
-      <h3>Protocols</h3>
-      <ul class="chips">
-        <li style="--c:var(--success)">REST</li>
-        <li style="--c:var(--pink)">GraphQL</li>
-        <li style="--c:var(--info)">WebSocket</li>
-        <li style="--c:var(--purple)">Socket.IO</li>
-        <li style="--c:var(--warning)">gRPC</li>
-      </ul>
-    </div>
-    <p class="meta">Postman is a trademark of its owner. Floki is an independent project and is not affiliated with or endorsed by Postman.</p>
   </div>
 </section>
 
-<section class="rule" id="teams">
+<section id="compare">
   <div class="wrap">
-    <div>
-      <h2>Share when you want to</h2>
-      <p class="sub" style="margin-bottom:24px">Sign in with email and password or Google, create team workspaces and invite people. Changes sync automatically.</p>
-      <ul class="points">
-        <li><strong>Roles you control.</strong> Invite people as Admin, Editor or Viewer.</li>
-        <li><strong>Self-host the sync server.</strong> It runs on PostgreSQL, so your team's data stays on your infrastructure.</li>
-        <li><strong>Optional.</strong> Local workspaces stay on your computer; only workspaces you share are synced to the server.</li>
-      </ul>
-      <a class="btn ghost" href="https://github.com/Adityakumar-blip/floki/tree/main/server">Self-host the sync server</a>
+    <h2>Floki and Postman, side by side</h2>
+    <p class="sub">Postman does a lot, and some of it Floki doesn't do yet. Here is where each one stands, including the rows where Postman is ahead.</p>
+    <div class="tablewrap">
+      <table class="compare">
+        <caption class="sr">Comparison of Floki and Postman</caption>
+        <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col" class="us">Floki</th><th scope="col">Postman</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">How the app is built</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Native Rust, drawn on the GPU</td>
+            <td><span class="mark part" aria-hidden="true">~</span>Electron, a bundled Chromium browser</td></tr>
+          <tr><th scope="row">Use it without an account</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Everything except team sync, including collections, scripts and the runner</td>
+            <td><span class="mark part" aria-hidden="true">~</span>A lightweight client; most features need sign-in</td></tr>
+          <tr><th scope="row">Team sync on your own servers</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Run the Floki sync server yourself and point the app at it</td>
+            <td><span class="mark no" aria-hidden="true">✗</span>Team data syncs through Postman's cloud</td></tr>
+          <tr><th scope="row">Postman collections and <code>pm.*</code> scripts</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Imports them and runs most scripts</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>Its own format</td></tr>
+          <tr><th scope="row">HTTP, GraphQL, gRPC, WebSocket, Socket.IO, MQTT, SSE</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>All seven</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>All seven</td></tr>
+          <tr><th scope="row">Collection runner with data files</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Yes</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>Yes</td></tr>
+          <tr><th scope="row">Running collections in CI</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span><code>floki-cli</code>, one file, no account</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>Postman CLI, or Newman on Node.js</td></tr>
+          <tr><th scope="row">Price</th>
+            <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Free</td>
+            <td><span class="mark part" aria-hidden="true">~</span>Free plan, paid plans for teams and higher limits</td></tr>
+          <tr><th scope="row">Platforms</th>
+            <td class="us"><span class="mark part" aria-hidden="true">~</span>Linux and Windows; macOS on the way</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>macOS, Windows, Linux and the web</td></tr>
+          <tr><th scope="row">Hosted mock servers, monitors and API docs</th>
+            <td class="us"><span class="mark no" aria-hidden="true">✗</span>Not included</td>
+            <td><span class="mark yes" aria-hidden="true">✓</span>Yes</td></tr>
+        </tbody>
+      </table>
     </div>
+    <p class="fine">Compared with Postman's desktop app as described in its public documentation in October 2026. Postman changes often; if something here is out of date, <a href="https://github.com/Adityakumar-blip/floki/issues">open an issue</a> and we'll fix it. Postman is a trademark of its owner. Floki is an independent project and is not affiliated with or endorsed by Postman.</p>
   </div>
 </section>
 
-<section class="rule" id="download">
+<section id="teams">
+  <div class="wrap">
+    <h2>Share when you want to</h2>
+    <p class="sub">Sign in to share workspaces with your team, on the Floki server or on a server you run yourself. Changes sync on their own.</p>
+    <ul class="points">
+      <li><strong>Roles you control</strong>Invite people to a workspace by email as Admin, Editor or Viewer, or add them to a team so they can open its workspaces.</li>
+      <li><strong>Run your own sync server</strong>The Floki sync server is a single program backed by PostgreSQL. Run it with Docker Compose, which also sets up HTTPS for your domain, or as a systemd service behind nginx. Each release includes a ready-to-run Linux build. <a href="https://github.com/Adityakumar-blip/floki/tree/main/server">Server setup guide</a>.</li>
+      <li><strong>Connect the app to it</strong>In Floki, choose Sign in, then "Use a self-hosted server", and enter your server's address. Accounts, teams and shared workspaces then live only on your server. Sign-in is by email and password; Google sign-in works when you add your own Google credentials to the server.</li>
+      <li><strong>Private by default</strong>Local workspaces never leave your computer. History, cookies and settings stay local even in shared workspaces, and Floki has no telemetry.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="download">
   <div class="wrap">
     <h2>Download Floki</h2>
-    <p class="sub" id="dl-sub">Latest release for Linux and Windows.</p>
+    <p class="sub" id="dl-sub">The latest release for Linux and Windows.</p>
     <div class="dl">
       <article class="card" id="card-windows">
-        <h3>Windows <span class="meta" id="size-windows"></span></h3>
+        <h3>Windows <small id="size-windows"></small></h3>
         <p class="file">Floki-windows-x64-setup.exe</p>
         <a class="btn" id="dl-windows" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-windows-x64-setup.exe">Download for Windows</a>
-        <p>Run the installer. Floki is added to the Start menu.</p>
+        <p>Run the installer. Floki is added to the Start menu, and <code>floki-cli</code> is installed next to it.</p>
       </article>
       <article class="card" id="card-linux">
-        <h3>Linux <span class="meta" id="size-linux"></span></h3>
+        <h3>Linux <small id="size-linux"></small></h3>
         <p class="file">Floki-linux-x64.deb</p>
         <a class="btn" id="dl-linux" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.deb">Download for Linux</a>
-        <p>Double-click to install on Ubuntu or Debian. On other distros, download <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.tar.gz">the .tar.gz</a> and run:</p>
-        <div class="codewrap">
-          <pre class="code" id="linux-cmd" tabindex="0">tar -xzf Floki-linux-x64.tar.gz && ./Floki/install.sh</pre>
-          <button class="copy" type="button" id="copy-btn" aria-label="Copy Linux install command">Copy</button>
+        <p>Double-click to install on Ubuntu or Debian. On other distributions, download <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-linux-x64.tar.gz">the .tar.gz</a> and run:</p>
+        <div class="cmd">
+          <pre id="linux-cmd" tabindex="0">tar -xzf Floki-linux-x64.tar.gz && ./Floki/install.sh</pre>
+          <button class="copy" type="button" id="copy-btn" aria-label="Copy the Linux install command">Copy</button>
         </div>
       </article>
     </div>
-    <p class="note"><span class="mac" id="mac-note">macOS build coming soon.</span> <span id="all-rel"><a href="https://github.com/Adityakumar-blip/floki/releases">All releases on GitHub</a></span></p>
+    <p class="cli">For CI, download just the command-line runner: <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-linux-x64">floki-cli for Linux</a> or <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-windows-x64.exe">floki-cli for Windows</a>. <a href="https://github.com/Adityakumar-blip/floki/releases">All releases</a>.</p>
   </div>
 </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <span>&copy; <span id="year">2026</span> Floki. Source on GitHub.</span>
+    <span>&copy; <span id="year">2026</span> Floki</span>
     <ul>
-      <li><a href="https://github.com/Adityakumar-blip/floki">GitHub</a></li>
+      <li><a href="https://github.com/Adityakumar-blip/floki">Source on GitHub</a></li>
       <li><a href="https://github.com/Adityakumar-blip/floki/releases">Releases</a></li>
       <li><a href="https://github.com/Adityakumar-blip/floki/tree/main/server">Sync server</a></li>
     </ul>
@@ -304,8 +435,25 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
   var ASSETS={windows:'Floki-windows-x64-setup.exe',linux:'Floki-linux-x64.deb'};
   var NAMES={windows:'Windows',linux:'Linux'};
   var $=function(id){return document.getElementById(id)};
+  $('year').textContent=new Date().getFullYear();
 
-  document.getElementById('year').textContent=new Date().getFullYear();
+  // The hero answer streams in once, the way Floki's Assembled view shows it.
+  var words='Every request you send is a round trip you **wait** on. A client that opens instantly and stays out of the way gives that time back, many times a day.'.split(' ');
+  var text=$('ex-text'),caret=$('ex-caret'),count=$('ex-events'),status=$('ex-status');
+  function show(n){
+    var html=words.slice(0,n).join(' ').replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]}).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+    text.innerHTML=html;
+    count.textContent=(n+1)+' events';
+  }
+  function done(){caret.hidden=true;status.textContent='200 OK';$('ex-tokens').textContent='41 in / 31 out tokens';count.textContent=(words.length+2)+' events'}
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches){show(words.length);done()}
+  else{
+    var i=0;
+    (function tick(){
+      i++;show(i);
+      if(i<words.length) setTimeout(tick,55+Math.random()*70); else done();
+    })();
+  }
 
   function detect(){
     var p=((navigator.userAgentData&&navigator.userAgentData.platform)||'').toLowerCase();
@@ -320,67 +468,42 @@ footer ul{display:flex;gap:20px;list-style:none;margin:0;padding:0}
   var os=detect();
   var urls={windows:BASE+ASSETS.windows,linux:BASE+ASSETS.linux};
   var sizes={};
-
   function mb(n){return (n/1048576).toFixed(1)+' MB'}
-
   function render(){
-    var prim=$('dl-primary'),label=$('dl-label'),others=$('dl-others');
     var target=(os==='windows'||os==='linux')?os:null;
-    var rest=['windows','linux'].filter(function(k){return k!==target});
     if(target){
-      prim.href=urls[target];
-      label.textContent='Download for '+NAMES[target]+(sizes[target]?' ('+mb(sizes[target])+')':'');
+      $('dl-primary').href=urls[target];
+      $('dl-label').textContent='Download for '+NAMES[target];
       $('card-'+target).classList.add('active');
-    }else{
-      prim.href='https://github.com/'+REPO+'/releases/latest';
-      label.textContent='Download Floki';
     }
     $('dl-soon').hidden=os!=='mac';
-    others.textContent=target?'Also for ':'Available for ';
-    rest.forEach(function(k,i){
-      if(i) others.appendChild(document.createTextNode(' and '));
-      var a=document.createElement('a');a.href=urls[k];a.textContent=NAMES[k];others.appendChild(a);
-    });
     ['windows','linux'].forEach(function(k){
       $('dl-'+k).href=urls[k];
       $('size-'+k).textContent=sizes[k]?mb(sizes[k]):'';
     });
-    $('mac-note').hidden=os!=='mac';
   }
   render();
   fetch('https://api.github.com/repos/'+REPO+'/releases/latest',{headers:{Accept:'application/vnd.github+json'}})
     .then(function(r){if(!r.ok) throw new Error(r.status);return r.json()})
     .then(function(rel){
       (rel.assets||[]).forEach(function(a){
-        ['windows','linux'].forEach(function(k){
-          if(a.name===ASSETS[k]){urls[k]=a.browser_download_url;sizes[k]=a.size}
-        });
+        ['windows','linux'].forEach(function(k){if(a.name===ASSETS[k]){urls[k]=a.browser_download_url;sizes[k]=a.size}});
       });
-      var d=rel.published_at?new Date(rel.published_at).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'';
-      $('dl-meta').innerHTML='';
-      var b=document.createElement('b');b.textContent=rel.tag_name||'Latest release';
-      $('dl-meta').appendChild(b);
-      if(d) $('dl-meta').appendChild(document.createTextNode(' · released '+d));
-      $('dl-meta').appendChild(document.createTextNode(' · '));
-      var l=document.createElement('a');l.href=rel.html_url||'https://github.com/'+REPO+'/releases';l.textContent='release notes';
-      $('dl-meta').appendChild(l);
+      var meta=$('dl-meta');
+      meta.textContent='Free for Linux and Windows. Version '+(rel.tag_name||'')+(rel.published_at?', released '+new Date(rel.published_at).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'')+'. ';
+      var l=document.createElement('a');l.href=rel.html_url||'https://github.com/'+REPO+'/releases';l.textContent='Release notes';
+      meta.appendChild(l);
       if(rel.tag_name) $('dl-sub').textContent='Version '+rel.tag_name+' for Linux and Windows.';
       render();
     })
-    .catch(function(){
-      $('dl-meta').innerHTML='<a href="https://github.com/'+REPO+'/releases">All releases on GitHub</a>';
-    });
+    .catch(function(){});
 
   var btn=$('copy-btn');
   btn.addEventListener('click',function(){
     var t=$('linux-cmd').textContent;
-    function done(ok){btn.textContent=ok?'Copied':'Press Ctrl+C';setTimeout(function(){btn.textContent='Copy'},1800)}
-    if(navigator.clipboard&&navigator.clipboard.writeText){
-      navigator.clipboard.writeText(t).then(function(){done(true)},function(){done(false)});
-    }else{
-      var r=document.createRange();r.selectNodeContents($('linux-cmd'));
-      var s=getSelection();s.removeAllRanges();s.addRange(r);done(false);
-    }
+    function fin(ok){btn.textContent=ok?'Copied':'Press Ctrl+C';setTimeout(function(){btn.textContent='Copy'},1800)}
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){fin(true)},function(){fin(false)})}
+    else{var r=document.createRange();r.selectNodeContents($('linux-cmd'));var s=getSelection();s.removeAllRanges();s.addRange(r);fin(false)}
   });
 })();
 </script>

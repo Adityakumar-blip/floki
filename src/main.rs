@@ -5,16 +5,19 @@ mod cloud;
 mod grpc;
 mod importers;
 mod snippets;
-mod http;
 mod kv;
-mod model;
+mod mqtt;
 mod request;
+mod runner_view;
 mod storage;
 mod teams;
 mod store;
 mod theme;
 mod ui;
 mod ws;
+
+// The UI-free core lives in the library so `floki-cli` can share it; re-exported so `crate::model` paths keep working.
+pub(crate) use floki::{auth, http, model, runner, script};
 
 use chrono::{Local, TimeZone};
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
@@ -23,7 +26,7 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use kv::{KvChanged, KvEditor};
-use model::{parse_curl, Settings, GLOBALS_ID, Environment, Folder, Item, KeyValue, Request, SavedRequest, ThemeMode, Workspace};
+use model::{parse_curl, Settings, GLOBALS_ID, Environment, Folder, Item, Request, SavedRequest, ThemeMode, Workspace};
 use request::{RequestEditor, RequestEvent};
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -33,7 +36,7 @@ use ui::*;
 
 actions!(
     floki,
-    [Send, Save, NewTab, CloseTab, NextTab, PrevTab, ToggleSidebar, FocusUrl, Dismiss, OpenImport]
+    [Send, Save, NewTab, CloseTab, NextTab, PrevTab, ToggleSidebar, FocusUrl, Dismiss, OpenImport, OpenSearch]
 );
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Layers, Code, Save, Send, FolderPlus, ArrowUpRight, ArrowDownLeft, Plug, Users, UserPlus, LogOut]);
@@ -91,6 +94,14 @@ enum Tab {
         editor: Entity<KvEditor>,
         _sub: Subscription,
     },
+    /// Scripts of a collection or folder; they run around every request inside it.
+    Scripts {
+        id: u64,
+        pre: Entity<EditorState>,
+        post: Entity<EditorState>,
+        _subs: [Subscription; 2],
+    },
+    Runner(Entity<runner_view::RunnerView>),
     /// A saved response, shown read-only in its own tab.
     Example {
         request: u64,
@@ -122,6 +133,10 @@ enum Modal {
     },
     /// Proxy, CA certificate, client certificate, client key.
     Settings([Entity<InputState>; 4]),
+    /// Cookie jar; the inputs add a cookie: domain, name, value, path.
+    Cookies { inputs: [Entity<InputState>; 4], error: Option<String> },
+    /// Search everything; `selected` indexes the current results.
+    Search { input: Entity<InputState>, selected: usize, _sub: Subscription },
     Cloud(teams::CloudModal),
 }
 
@@ -222,6 +237,7 @@ impl Floki {
         let sub = cx.subscribe_in(&editor, window, |this, editor, event: &RequestEvent, window, cx| match event {
             RequestEvent::Changed => cx.notify(),
             RequestEvent::SaveAs => this.open_save_as(editor.clone(), false, window, cx),
+            RequestEvent::ManageCookies => this.open_cookies(window, cx),
         });
         Tab::Request { editor, _sub: sub }
     }
@@ -255,6 +271,84 @@ impl Floki {
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         cx.notify();
+    }
+
+    fn open_runner(&mut self, target: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.popup = None;
+        if let Some(ix) = self.tabs.iter().position(|tab| matches!(tab, Tab::Runner(v) if v.read(cx).target == target)) {
+            self.active = ix;
+            return cx.notify();
+        }
+        let store = self.store.clone();
+        let view = cx.new(|cx| runner_view::RunnerView::new(store, target, window, cx));
+        self.tabs.push(Tab::Runner(view));
+        self.active = self.tabs.len() - 1;
+        cx.notify();
+    }
+
+    fn open_scripts(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.popup = None;
+        if let Some(ix) = self.tabs.iter().position(|tab| matches!(tab, Tab::Scripts { id: tid, .. } if *tid == id)) {
+            self.active = ix;
+            return cx.notify();
+        }
+        let Some(scripts) = self.ws(cx).scripts_of(id).map(|(_, s)| s.clone()) else { return };
+        let pre = request::code_editor(&scripts.pre_request, "javascript", window, cx);
+        let post = request::code_editor(&scripts.test, "javascript", window, cx);
+        let watch = |editor: &Entity<EditorState>, pre_request: bool, cx: &mut Context<Self>| {
+            cx.subscribe(editor, move |this, editor, ev: &InputEvent, cx| {
+                if !matches!(ev, InputEvent::Change) {
+                    return;
+                }
+                let text = editor.read(cx).value().to_string();
+                this.update_ws(cx, |ws| {
+                    if let Some(s) = ws.scripts_of_mut(id) {
+                        *if pre_request { &mut s.pre_request } else { &mut s.test } = text;
+                    }
+                });
+            })
+        };
+        let _subs = [watch(&pre, true, cx), watch(&post, false, cx)];
+        self.tabs.push(Tab::Scripts { id, pre, post, _subs });
+        self.active = self.tabs.len() - 1;
+        cx.notify();
+    }
+
+    fn render_scripts_tab(&self, id: u64, pre: &Entity<EditorState>, post: &Entity<EditorState>, t: &Tokens, cx: &Context<Self>) -> AnyElement {
+        let name = self.ws(cx).scripts_of(id).map(|(n, _)| n).unwrap_or_default();
+        let block = |title: &'static str, help: &'static str, editor: &Entity<EditorState>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                .child(div().text_color(rgb(t.text_secondary)).child(help))
+                .child(
+                    div()
+                        .h(px(220.))
+                        .border_1()
+                        .border_color(rgb(t.border))
+                        .rounded(px(4.))
+                        .font_family(MONO)
+                        .child(Editor::new(editor).appearance(false).h_full()),
+                )
+        };
+        div()
+            .id("scripts-tab")
+            .size_full()
+            .overflow_y_scroll()
+            .bg(rgb(t.bg))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(div().font_weight(FontWeight::SEMIBOLD).text_size(px(14.)).child(format!("{name} scripts")))
+            .child(block("Pre-request", "Runs before every request inside, ahead of the request's own pre-request script.", pre))
+            .child(block("Post-response", "Runs after every response inside, ahead of the request's own post-response script.", post))
+            .child(div().text_color(rgb(t.text_tertiary)).child(
+                "Available: test, expect, res, req, env, globals, collection, vars, data, info, console. Postman's pm.* scripts also run.",
+            ))
+            .into_any_element()
     }
 
     fn open_example(&mut self, request: u64, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -458,7 +552,7 @@ impl Floki {
                     if folder.is_empty() {
                         items.extend(requests);
                     } else {
-                        items.push(Item::Folder(Folder { id: ws.alloc_id(), name: folder, items: requests, expanded: false }));
+                        items.push(Item::Folder(Folder { id: ws.alloc_id(), name: folder, items: requests, expanded: false, scripts: Default::default() }));
                     }
                 }
                 if let Some(c) = ws.collections.iter_mut().find(|c| c.id == id) {
@@ -471,23 +565,7 @@ impl Floki {
         }
         let value: serde_json::Value = serde_json::from_str(trimmed)
             .map_err(|e| format!("Paste a cURL command, Postman JSON, or an OpenAPI, RAML or WSDL document ({e})"))?;
-        if value.get("values").is_some() && value.get("info").is_none() {
-            let name = value["name"].as_str().unwrap_or("Imported environment").to_string();
-            let values: Vec<KeyValue> = value["values"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|r| {
-                            Some(KeyValue {
-                                key: r["key"].as_str()?.into(),
-                                value: r["value"].as_str().unwrap_or_default().into(),
-                                enabled: r["enabled"].as_bool().unwrap_or(true),
-                                file: false,
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+        if let Some((name, values)) = model::environment_from_postman(&value) {
             let env_name = name.clone();
             self.update_ws(cx, |ws| {
                 let id = ws.alloc_id();
@@ -594,6 +672,93 @@ impl Floki {
         cx.notify();
     }
 
+    fn open_cookies(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = |hint: &str, value: &str, window: &mut Window, cx: &mut Context<Self>| {
+            let (hint, value) = (hint.to_string(), value.to_string());
+            cx.new(|cx| InputState::new(window, cx).placeholder(hint).default_value(value))
+        };
+        self.modal = Some(Modal::Cookies {
+            inputs: [input("example.com", "", window, cx), input("Name", "", window, cx), input("Value", "", window, cx), input("/", "/", window, cx)],
+            error: None,
+        });
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn add_cookie(&mut self, cx: &mut Context<Self>) {
+        let Some(Modal::Cookies { inputs, error }) = &mut self.modal else { return };
+        let [domain, name, value, path] = inputs.clone().map(|i| i.read(cx).value().trim().to_string());
+        let domain = domain.trim_start_matches('.').to_ascii_lowercase();
+        if domain.is_empty() || name.is_empty() {
+            *error = Some("Enter a domain and a cookie name".into());
+            return cx.notify();
+        }
+        *error = None;
+        let path = if path.starts_with('/') { path } else { "/".into() };
+        self.update_ws(cx, |ws| {
+            ws.cookies.retain(|c| !(c.name == name && c.domain == domain && c.path == path));
+            ws.cookies.push(model::StoredCookie { name, value, domain, path, expires: None, host_only: false, secure: false, http_only: false });
+        });
+    }
+
+    fn render_cookie_list(&self, t: &Tokens, cx: &Context<Self>) -> AnyElement {
+        let cookies = &self.ws(cx).cookies;
+        if cookies.is_empty() {
+            return div().px_4().py_6().text_color(rgb(t.text_secondary)).child(
+                "No cookies yet. Cookies that servers set are kept here and sent with later requests to the same site.",
+            ).into_any_element();
+        }
+        let mut domains: Vec<&str> = cookies.iter().map(|c| c.domain.as_str()).collect();
+        domains.sort_unstable();
+        domains.dedup();
+        let list = div().id("cookie-list").flex_1().min_h_0().overflow_y_scroll().px_4().flex().flex_col().gap_3();
+        domains.into_iter().enumerate().fold(list, |list: Stateful<Div>, (dx, domain)| {
+            let owned = domain.to_string();
+            let rows = cookies.iter().enumerate().filter(|(_, c)| c.domain == domain).map(|(ix, c)| {
+                let (name, domain, path) = (c.name.clone(), c.domain.clone(), c.path.clone());
+                let expires = c
+                    .expires
+                    .and_then(|t| Local.timestamp_opt(t, 0).single())
+                    .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "Session".into());
+                let flags = [(c.secure, "Secure"), (c.http_only, "HttpOnly")].iter().filter(|f| f.0).map(|f| f.1).collect::<Vec<_>>().join(" ");
+                div()
+                    .h(px(30.))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .border_b_1()
+                    .border_color(rgb(t.border))
+                    .child(div().w(px(140.)).truncate().font_family(MONO).child(c.name.clone()))
+                    .child(div().flex_1().min_w_0().truncate().font_family(MONO).text_color(rgb(t.text_secondary)).child(c.value.clone()))
+                    .child(div().w(px(60.)).truncate().text_color(rgb(t.text_tertiary)).child(c.path.clone()))
+                    .child(div().w(px(110.)).text_color(rgb(t.text_tertiary)).child(expires))
+                    .child(div().w(px(100.)).text_color(rgb(t.text_tertiary)).child(flags))
+                    .child(icon_button(("cookie-del", ix), "icons/delete.svg", t).on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_ws(cx, |ws| ws.cookies.retain(|c| !(c.name == name && c.domain == domain && c.path == path)));
+                    })))
+            });
+            list.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(28.))
+                            .flex()
+                            .items_center()
+                            .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child(owned.clone()))
+                            .child(ghost_button(("cookie-domain-clear", dx), t).child("Remove all").on_click(cx.listener(move |this, _, _, cx| {
+                                let domain = owned.clone();
+                                this.update_ws(cx, |ws| ws.cookies.retain(|c| c.domain != domain));
+                            }))),
+                    )
+                    .children(rows),
+            )
+        })
+        .into_any_element()
+    }
+
     fn start_rename(&mut self, id: u64, current: String, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
         input.read(cx).focus_handle(cx).focus(window, cx);
@@ -651,6 +816,8 @@ impl Floki {
         let ws = self.store.read(cx).ws.clone();
         self.tabs.retain(|tab| match tab {
             Tab::Environment { id: env, .. } => *env != id,
+            Tab::Scripts { id: owner, .. } => ws.scripts_of(*owner).is_some(),
+            Tab::Runner(view) => ws.scripts_of(view.read(cx).target).is_some(),
             Tab::Example { request, .. } => ws.request(*request).is_some(),
             _ => true,
         });
@@ -748,6 +915,137 @@ impl Floki {
         }
     }
 
+    fn on_search(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(window, cx);
+    }
+
+    const SEARCH_LIMIT: usize = 50;
+
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search requests, collections, environments and history"));
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        let _sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::Change => {
+                if let Some(Modal::Search { selected, .. }) = &mut this.modal {
+                    *selected = 0;
+                }
+                cx.notify();
+            }
+            InputEvent::PressEnter { .. } => this.choose_search_hit(None, window, cx),
+            _ => {}
+        });
+        self.modal = Some(Modal::Search { input, selected: 0, _sub });
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn search_hits(&self, cx: &App) -> Vec<model::SearchHit> {
+        let Some(Modal::Search { input, .. }) = &self.modal else { return Vec::new() };
+        self.ws(cx).search(input.read(cx).value().as_ref(), Self::SEARCH_LIMIT)
+    }
+
+    fn move_search_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let count = self.search_hits(cx).len();
+        if let Some(Modal::Search { selected, .. }) = &mut self.modal {
+            if count > 0 {
+                *selected = (*selected as isize + delta).rem_euclid(count as isize) as usize;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Opens a search result: `ix`, or the selected one.
+    fn choose_search_hit(&mut self, ix: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Modal::Search { selected, .. }) = &self.modal else { return };
+        let Some(hit) = self.search_hits(cx).into_iter().nth(ix.unwrap_or(*selected)) else { return };
+        self.modal = None;
+        match hit.found {
+            model::Found::Request(id) => {
+                if let Some((_, request)) = self.ws(cx).request(id).map(|(c, r)| (c.id, r.clone())) {
+                    self.open_request(Some(id), request, window, cx);
+                }
+            }
+            model::Found::Collection(id) | model::Found::Folder(id) => {
+                self.update_ws(cx, |ws| ws.reveal(id));
+                self.view = SidebarView::Collections;
+                self.sidebar_open = true;
+            }
+            model::Found::Environment(id) => self.open_environment(id, window, cx),
+            model::Found::History(ix) => {
+                if let Some(entry) = self.ws(cx).history.get(ix).cloned() {
+                    self.open_request(None, entry.request, window, cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn render_search(&self, input: &Entity<InputState>, selected: usize, t: &Tokens, cx: &Context<Self>) -> Stateful<Div> {
+        let hits = self.search_hits(cx);
+        let query_empty = input.read(cx).value().trim().is_empty();
+        let rows = hits.iter().enumerate().map(|(ix, hit)| {
+            let kind = match hit.found {
+                model::Found::Request(_) | model::Found::History(_) => None,
+                model::Found::Collection(_) => Some("icons/folder-closed.svg"),
+                model::Found::Folder(_) => Some("icons/folder-open.svg"),
+                model::Found::Environment(_) => Some("icons/layers.svg"),
+            };
+            div()
+                .id(("search-hit", ix))
+                .h(px(40.))
+                .px_4()
+                .flex()
+                .items_center()
+                .gap_3()
+                .cursor_pointer()
+                .when(ix == selected, |d| d.bg(rgb(t.hover)))
+                .hover(|d| d.bg(rgb(t.hover)))
+                .child(
+                    div()
+                        .w(px(56.))
+                        .flex_none()
+                        .flex()
+                        .justify_end()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .when_some(hit.method.clone(), |d, m| d.text_color(rgb(t.method(&m))).child(request::method_label(&m).to_string()))
+                        .when_some(kind, |d, path| d.child(icon(path, 14., t.text_secondary))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().truncate().text_color(rgb(t.text)).child(hit.title.clone()))
+                        .child(div().truncate().text_size(px(11.)).text_color(rgb(t.text_tertiary)).child(hit.detail.clone())),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| this.choose_search_hit(Some(ix), window, cx)))
+        });
+        let empty = hits.is_empty().then(|| {
+            div().px_4().py_6().text_color(rgb(t.text_secondary)).child(if query_empty {
+                "Type to search everything in this workspace."
+            } else {
+                "Nothing matches. Try fewer or shorter words."
+            })
+        });
+        modal_card("Search", 640., t, cx)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| match event.keystroke.key.as_str() {
+                "up" => {
+                    this.move_search_selection(-1, cx);
+                    cx.stop_propagation();
+                }
+                "down" => {
+                    this.move_search_selection(1, cx);
+                    cx.stop_propagation();
+                }
+                _ => {}
+            }))
+            .child(div().px_4().pb_3().child(modal_field(input, t)))
+            .when(query_empty && !hits.is_empty(), |d| d.child(div().px_4().pb_1().text_color(rgb(t.text_tertiary)).child("Recent")))
+            .child(div().id("search-results").flex_1().min_h_0().overflow_y_scroll().pb_2().children(rows).children(empty))
+    }
+
     fn on_import(&mut self, _: &OpenImport, window: &mut Window, cx: &mut Context<Self>) {
         self.open_import(window, cx);
     }
@@ -772,6 +1070,12 @@ impl Floki {
                     .child(icon("icons/settings.svg", 14., t.text_secondary))
                     .child("Proxy and certificates")
                     .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+            )
+            .child(
+                menu_item("cookies", t)
+                    .child(icon("icons/layers.svg", 14., t.text_secondary))
+                    .child("Cookies")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_cookies(window, cx))),
             )
             .child(
                 menu_item("data-folder", t)
@@ -819,11 +1123,8 @@ impl Floki {
                     .text_color(rgb(t.text_secondary))
                     .child(icon("icons/search.svg", 14., t.text_secondary))
                     .child("Search Floki")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.sidebar_open = true;
-                        this.filter.read(cx).focus_handle(cx).focus(window, cx);
-                        cx.notify();
-                    })),
+                    .child(div().text_size(px(11.)).text_color(rgb(t.text_tertiary)).child("Ctrl+K"))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
             )
             .child(
                 div().flex_1().flex().items_center().justify_end().gap_2().child(self.render_account_controls(t, cx)).child(
@@ -946,6 +1247,8 @@ impl Floki {
                         id,
                         vec![
                             ("Rename", Self::rename_action(id, f.name.clone())),
+                            ("Edit scripts", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.open_scripts(id, w, cx))),
+                            ("Run folder", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.open_runner(id, w, cx))),
                             ("Delete", Self::delete_action(id, "this folder and its requests")),
                         ],
                         t,
@@ -1044,6 +1347,8 @@ impl Floki {
                     ("Add request", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.add_request_to(id, w, cx)) as RowAction),
                     ("Rename", Self::rename_action(id, c.name.clone())),
                     ("Edit variables", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.open_environment(id, w, cx))),
+                    ("Edit scripts", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.open_scripts(id, w, cx))),
+                    ("Run collection", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.open_runner(id, w, cx))),
                     ("Export", Box::new(move |this: &mut Self, w: &mut Window, cx: &mut Context<Self>| this.export_collection(id, w, cx))),
                     ("Delete", Self::delete_action(id, "this collection and everything in it")),
                 ],
@@ -1302,6 +1607,8 @@ impl Floki {
                     (Some(e.request.method.clone()), e.title(), e.is_dirty())
                 }
                 Tab::Environment { id, .. } => (None, ws.variable_set(*id).map(|(n, _)| n).unwrap_or_default(), false),
+                Tab::Scripts { id, .. } => (None, format!("{} scripts", ws.scripts_of(*id).map(|(n, _)| n).unwrap_or_default()), false),
+                Tab::Runner(view) => (None, view.read(cx).title(cx), false),
                 Tab::Example { request, ix, .. } => (
                     Some("e.g.".to_string()),
                     ws.request(*request).and_then(|(_, r)| r.examples.get(*ix)).map(|e| e.name.clone()).unwrap_or_default(),
@@ -1399,7 +1706,7 @@ impl Floki {
                 this.popup = None;
                 this.tabs.retain(|tab| match tab {
                     Tab::Request { editor, .. } => editor.read(cx).is_dirty(),
-                    Tab::Environment { .. } | Tab::Example { .. } => false,
+                    Tab::Environment { .. } | Tab::Scripts { .. } | Tab::Runner(_) | Tab::Example { .. } => false,
                 });
                 this.active = 0;
                 if this.tabs.is_empty() {
@@ -1676,6 +1983,34 @@ impl Floki {
                         }),
                     )))
             }
+            Modal::Cookies { inputs, error } => card("Cookies", 760.)
+                .child(self.render_cookie_list(t, cx))
+                .child(
+                    div()
+                        .px_4()
+                        .pt_3()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(rgb(t.border))
+                        .child(div().text_color(rgb(t.text_secondary)).child("Add a cookie"))
+                        .child(div().flex().gap_2().children(inputs.iter().map(|i| div().flex_1().child(field(i)))))
+                        .children(error.clone().map(|e| div().text_color(rgb(t.error)).child(e))),
+                )
+                .child(
+                    footer()
+                        .child(ghost_button("cookies-clear", t).child("Clear all").on_click(cx.listener(|this, _, _, cx| {
+                            this.update_ws(cx, |ws| ws.cookies.clear());
+                        })))
+                        .child(div().flex_1())
+                        .child(outline_button("cookie-add", "Add", t).on_click(cx.listener(|this, _, _, cx| this.add_cookie(cx))))
+                        .child(primary_button("cookies-done", "Done", t).on_click(cx.listener(|this, _, _, cx| {
+                            this.modal = None;
+                            cx.notify();
+                        }))),
+                ),
+            Modal::Search { input, selected, .. } => self.render_search(input, *selected, t, cx),
             Modal::Cloud(m) => self.render_cloud_modal(m, t, cx),
             Modal::Rename { input, .. } => card("Rename", 420.)
                 .child(div().px_4().child(field(input)))
@@ -1861,6 +2196,8 @@ impl Render for Floki {
         let content: AnyElement = match self.tabs.get(self.active) {
             Some(Tab::Request { editor, .. }) => editor.clone().into_any_element(),
             Some(Tab::Environment { id, editor, .. }) => self.render_env_tab(*id, editor, &t, cx),
+            Some(Tab::Scripts { id, pre, post, .. }) => self.render_scripts_tab(*id, pre, post, &t, cx),
+            Some(Tab::Runner(view)) => view.clone().into_any_element(),
             Some(Tab::Example { request, ix, body }) => self.render_example_tab(*request, *ix, body, &t, cx),
             None => div().into_any_element(),
         };
@@ -1897,6 +2234,7 @@ impl Render for Floki {
             .on_action(cx.listener(Self::on_focus_url))
             .on_action(cx.listener(Self::on_dismiss))
             .on_action(cx.listener(Self::on_import))
+            .on_action(cx.listener(Self::on_search))
             .relative()
             .size_full()
             .flex()
@@ -1947,6 +2285,8 @@ fn main() {
             KeyBinding::new("ctrl-\\", ToggleSidebar, None),
             KeyBinding::new("ctrl-l", FocusUrl, None),
             KeyBinding::new("ctrl-o", OpenImport, None),
+            KeyBinding::new("ctrl-k", OpenSearch, None),
+            KeyBinding::new("ctrl-p", OpenSearch, None),
             KeyBinding::new("escape", Dismiss, None),
         ]);
         let options = WindowOptions {

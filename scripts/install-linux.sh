@@ -6,10 +6,11 @@ cd "$(dirname "$0")"
 if [ -x floki ]; then
     BIN=floki
 else
-    cargo build --release --locked
+    cargo build --release --locked --bins
     BIN=target/release/floki
 fi
 install -Dm755 "$BIN" "$HOME/.local/bin/floki"
+install -Dm755 "$(dirname "$BIN")/floki-cli" "$HOME/.local/bin/floki-cli"
 for size in 16 24 32 48 64 128 256 512; do
     install -Dm644 "assets/app-icon/floki-$size.png" "$HOME/.local/share/icons/hicolor/${size}x${size}/apps/floki.png"
 done

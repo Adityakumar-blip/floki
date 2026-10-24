@@ -5,6 +5,16 @@ pub const METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", 
 pub const WEBSOCKET: &str = "WS";
 pub const SOCKET_IO: &str = "SOCKETIO";
 pub const GRPC: &str = "GRPC";
+pub const MQTT: &str = "MQTT";
+
+/// Label for the request-kind box and header badge.
+pub fn method_label(method: &str) -> &str {
+    match method {
+        SOCKET_IO => "Socket.IO",
+        GRPC => "gRPC",
+        m => m,
+    }
+}
 
 fn yes() -> bool {
     true
@@ -67,6 +77,98 @@ pub enum Auth {
         service: String,
         session_token: String,
     },
+    Jwt(Jwt),
+    #[serde(rename = "oauth1")]
+    OAuth1(OAuth1),
+    Hawk(Hawk),
+    Ntlm(Ntlm),
+}
+
+/// A JWT signed when the request is sent ("JWT Bearer" in Postman).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Jwt {
+    /// HS256/384/512, RS256/384/512, PS256/384/512, ES256/384.
+    pub algorithm: String,
+    /// HMAC secret, or a PEM private key (pasted, or a path to a .pem file) for RS/PS/ES.
+    pub secret: String,
+    /// `text` or `base64`: how an HMAC secret is written.
+    pub secret_encoding: String,
+    pub payload: String,
+    /// Extra JWT header fields, as JSON.
+    pub headers: String,
+    pub header_prefix: String,
+    /// `header` or `query`.
+    pub add_to: String,
+    pub query_key: String,
+}
+
+impl Default for Jwt {
+    fn default() -> Self {
+        Self {
+            algorithm: "HS256".into(),
+            secret: String::new(),
+            secret_encoding: "text".into(),
+            payload: "{}".into(),
+            headers: "{}".into(),
+            header_prefix: "Bearer".into(),
+            add_to: "header".into(),
+            query_key: "token".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OAuth1 {
+    pub consumer_key: String,
+    pub consumer_secret: String,
+    pub token: String,
+    pub token_secret: String,
+    /// HMAC-SHA1, HMAC-SHA256, HMAC-SHA512 or PLAINTEXT.
+    pub signature_method: String,
+    pub realm: String,
+    /// `header` or `query`.
+    pub add_to: String,
+}
+
+impl Default for OAuth1 {
+    fn default() -> Self {
+        Self {
+            consumer_key: String::new(),
+            consumer_secret: String::new(),
+            token: String::new(),
+            token_secret: String::new(),
+            signature_method: "HMAC-SHA1".into(),
+            realm: String::new(),
+            add_to: "header".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hawk {
+    pub id: String,
+    pub key: String,
+    /// `sha256` or `sha1`.
+    pub algorithm: String,
+    pub ext: String,
+}
+
+impl Default for Hawk {
+    fn default() -> Self {
+        Self { id: String::new(), key: String::new(), algorithm: "sha256".into(), ext: String::new() }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ntlm {
+    pub username: String,
+    pub password: String,
+    pub domain: String,
+    pub workstation: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,8 +176,14 @@ pub enum Auth {
 pub struct OAuth2 {
     pub access_token: String,
     pub header_prefix: String,
-    /// `client_credentials` or `password`; used by "Get New Access Token".
+    /// `authorization_code`, `authorization_code_pkce`, `client_credentials` or `password`; used by "Get New Access Token".
     pub grant_type: String,
+    /// Authorization code grants: where the browser signs in.
+    pub auth_url: String,
+    /// Authorization code grants: must be http://localhost:PORT/... (or empty for a free port) so Floki receives the code.
+    pub callback_url: String,
+    /// `basic` (Authorization header) or `body`: how the client ID and secret reach the token URL.
+    pub client_auth: String,
     pub token_url: String,
     pub client_id: String,
     pub client_secret: String,
@@ -90,6 +198,9 @@ impl Default for OAuth2 {
             access_token: String::new(),
             header_prefix: "Bearer".into(),
             grant_type: "client_credentials".into(),
+            auth_url: String::new(),
+            callback_url: String::new(),
+            client_auth: "basic".into(),
             token_url: String::new(),
             client_id: String::new(),
             client_secret: String::new(),
@@ -101,9 +212,20 @@ impl Default for OAuth2 {
 }
 
 impl Auth {
-    // ponytail: no NTLM, OAuth 1.0, Hawk, JWT, Akamai or ASAP; add when someone needs them.
-    pub const LABELS: &[&str] =
-        &["No Auth", "Basic Auth", "Bearer Token", "Digest Auth", "OAuth 2.0", "AWS Signature", "API Key"];
+    // ponytail: no Akamai EdgeGrid or ASAP; add when someone needs them.
+    pub const LABELS: &[&str] = &[
+        "No Auth",
+        "Basic Auth",
+        "Bearer Token",
+        "Digest Auth",
+        "OAuth 2.0",
+        "AWS Signature",
+        "API Key",
+        "JWT Bearer",
+        "OAuth 1.0",
+        "Hawk",
+        "NTLM",
+    ];
 
     pub fn label(&self) -> &'static str {
         Self::LABELS[self.index()]
@@ -118,6 +240,10 @@ impl Auth {
             Auth::OAuth2(_) => 4,
             Auth::AwsV4 { .. } => 5,
             Auth::ApiKey { .. } => 6,
+            Auth::Jwt(_) => 7,
+            Auth::OAuth1(_) => 8,
+            Auth::Hawk(_) => 9,
+            Auth::Ntlm(_) => 10,
         }
     }
 
@@ -136,6 +262,10 @@ impl Auth {
                 session_token: s(),
             },
             6 => Auth::ApiKey { key: s(), value: s(), in_query: false },
+            7 => Auth::Jwt(Jwt::default()),
+            8 => Auth::OAuth1(OAuth1::default()),
+            9 => Auth::Hawk(Hawk::default()),
+            10 => Auth::Ntlm(Ntlm::default()),
             _ => Auth::None,
         }
     }
@@ -150,20 +280,48 @@ impl Auth {
             }
             Auth::ApiKey { key, value, .. } => vec![("Key", key), ("Value", value)],
             Auth::OAuth2(o) => {
-                let mut fields = vec![
-                    ("Access Token", &mut o.access_token),
-                    ("Header Prefix", &mut o.header_prefix),
-                    ("Access Token URL", &mut o.token_url),
-                    ("Client ID", &mut o.client_id),
-                    ("Client Secret", &mut o.client_secret),
-                    ("Scope", &mut o.scope),
-                ];
+                let mut fields = vec![("Access Token", &mut o.access_token), ("Header Prefix", &mut o.header_prefix)];
+                if o.grant_type.starts_with("authorization_code") {
+                    fields.push(("Auth URL", &mut o.auth_url));
+                    fields.push(("Callback URL", &mut o.callback_url));
+                }
+                fields.push(("Access Token URL", &mut o.token_url));
+                fields.push(("Client ID", &mut o.client_id));
+                fields.push(("Client Secret", &mut o.client_secret));
+                fields.push(("Scope", &mut o.scope));
                 if o.grant_type == "password" {
                     fields.push(("Username", &mut o.username));
                     fields.push(("Password", &mut o.password));
                 }
                 fields
             }
+            Auth::Jwt(j) => {
+                let mut fields = vec![
+                    (if j.algorithm.starts_with("HS") { "Secret" } else { "Private Key" }, &mut j.secret),
+                    ("Payload", &mut j.payload),
+                    ("JWT Headers", &mut j.headers),
+                ];
+                if j.add_to == "query" {
+                    fields.push(("Query Param Name", &mut j.query_key));
+                } else {
+                    fields.push(("Header Prefix", &mut j.header_prefix));
+                }
+                fields
+            }
+            Auth::OAuth1(o) => vec![
+                ("Consumer Key", &mut o.consumer_key),
+                ("Consumer Secret", &mut o.consumer_secret),
+                ("Access Token", &mut o.token),
+                ("Token Secret", &mut o.token_secret),
+                ("Realm", &mut o.realm),
+            ],
+            Auth::Hawk(h) => vec![("Hawk Auth ID", &mut h.id), ("Hawk Auth Key", &mut h.key), ("ext", &mut h.ext)],
+            Auth::Ntlm(n) => vec![
+                ("Username", &mut n.username),
+                ("Password", &mut n.password),
+                ("Domain", &mut n.domain),
+                ("Workstation", &mut n.workstation),
+            ],
             Auth::AwsV4 { access_key, secret_key, region, service, session_token } => vec![
                 ("AccessKey", access_key),
                 ("SecretKey", secret_key),
@@ -171,6 +329,33 @@ impl Auth {
                 ("Service Name", service),
                 ("Session Token", session_token),
             ],
+        }
+    }
+
+    /// Settings picked from a fixed list, as (label, current value, choices); the UI cycles through them.
+    pub fn choices_mut(&mut self) -> Vec<(&'static str, &mut String, &'static [&'static str])> {
+        match self {
+            Auth::OAuth2(o) => vec![
+                ("Grant Type", &mut o.grant_type, &["authorization_code", "authorization_code_pkce", "client_credentials", "password"]),
+                ("Client Authentication", &mut o.client_auth, &["basic", "body"]),
+            ],
+            Auth::Jwt(j) => {
+                let hmac = j.algorithm.starts_with("HS");
+                let mut choices: Vec<(&'static str, &mut String, &'static [&'static str])> = vec![
+                    ("Algorithm", &mut j.algorithm, &["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384"]),
+                    ("Add To", &mut j.add_to, &["header", "query"]),
+                ];
+                if hmac {
+                    choices.push(("Secret Encoding", &mut j.secret_encoding, &["text", "base64"]));
+                }
+                choices
+            }
+            Auth::OAuth1(o) => vec![
+                ("Signature Method", &mut o.signature_method, &["HMAC-SHA1", "HMAC-SHA256", "HMAC-SHA512", "PLAINTEXT"]),
+                ("Add To", &mut o.add_to, &["header", "query"]),
+            ],
+            Auth::Hawk(h) => vec![("Algorithm", &mut h.algorithm, &["sha256", "sha1"])],
+            _ => vec![],
         }
     }
 
@@ -222,7 +407,41 @@ impl BinaryEncoding {
     }
 }
 
-/// Connection settings shared by WebSocket and Socket.IO requests.
+/// A cookie kept between requests (the cookie jar). Local to this computer; not synced.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredCookie {
+    pub name: String,
+    pub value: String,
+    /// Lowercase, without a leading dot.
+    pub domain: String,
+    pub path: String,
+    /// Unix seconds; `None` lasts until removed.
+    #[serde(default)]
+    pub expires: Option<i64>,
+    /// Set without a Domain attribute, so only the exact host gets it back.
+    #[serde(default)]
+    pub host_only: bool,
+    #[serde(default)]
+    pub secure: bool,
+    #[serde(default)]
+    pub http_only: bool,
+}
+
+/// JavaScript run before a request is sent and after its response arrives (see script.rs).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Scripts {
+    pub pre_request: String,
+    pub test: String,
+}
+
+impl Scripts {
+    pub fn is_empty(&self) -> bool {
+        self.pre_request.trim().is_empty() && self.test.trim().is_empty()
+    }
+}
+
+/// Connection settings shared by WebSocket, Socket.IO and MQTT requests.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SocketSettings {
@@ -233,6 +452,15 @@ pub struct SocketSettings {
     pub max_message_mb: u32,
     /// Socket.IO only; the URL path names the namespace.
     pub handshake_path: String,
+    /// MQTT only. Empty generates one per connection.
+    pub client_id: String,
+    /// MQTT topic filters to subscribe to on connect, comma-separated.
+    pub subscribe: String,
+    /// MQTT QoS (0-2) for subscriptions and published messages.
+    pub qos: u8,
+    /// MQTT keep-alive in seconds; 0 turns it off.
+    pub keep_alive_s: u16,
+    pub retain: bool,
 }
 
 impl Default for SocketSettings {
@@ -243,6 +471,11 @@ impl Default for SocketSettings {
             reconnect_interval_ms: 5000,
             max_message_mb: 10,
             handshake_path: "/socket.io".into(),
+            client_id: String::new(),
+            subscribe: String::new(),
+            qos: 0,
+            keep_alive_s: 60,
+            retain: false,
         }
     }
 }
@@ -341,12 +574,17 @@ pub struct Request {
     pub socket: SocketSettings,
     pub socket_event: String,
     pub socket_ack: bool,
+    /// Socket.IO events to show in the log; `enabled` means listening. Empty shows every event.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub socket_events: Vec<KeyValue>,
     /// gRPC "package.Service/Method".
     pub grpc_method: String,
     /// gRPC .proto file; empty uses server reflection.
     pub grpc_proto: String,
     /// Request description shown in the Docs tab.
     pub description: String,
+    #[serde(skip_serializing_if = "Scripts::is_empty")]
+    pub scripts: Scripts,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<Example>,
 }
@@ -385,9 +623,11 @@ impl Default for Request {
             socket: SocketSettings::default(),
             socket_event: "message".into(),
             socket_ack: false,
+            socket_events: Vec::new(),
             grpc_method: String::new(),
             grpc_proto: String::new(),
             description: String::new(),
+            scripts: Scripts::default(),
             examples: Vec::new(),
         }
     }
@@ -405,7 +645,7 @@ impl Request {
         }
     }
 
-    /// Non-HTTP requests are stored with a pseudo-method: `WS`, `SOCKETIO` or `GRPC`.
+    /// Non-HTTP requests are stored with a pseudo-method: `WS`, `SOCKETIO`, `MQTT` or `GRPC`.
     pub fn is_websocket(&self) -> bool {
         self.method == WEBSOCKET
     }
@@ -414,9 +654,19 @@ impl Request {
         self.method == SOCKET_IO
     }
 
-    /// WebSocket or Socket.IO: a long-lived connection with a message log.
+    /// Socket.IO: whether an incoming event belongs in the log.
+    pub fn listens_to(&self, event: &str) -> bool {
+        let mut listed = self.socket_events.iter().filter(|e| !e.key.trim().is_empty()).peekable();
+        listed.peek().is_none() || listed.any(|e| e.enabled && e.key.trim() == event)
+    }
+
+    pub fn is_mqtt(&self) -> bool {
+        self.method == MQTT
+    }
+
+    /// WebSocket, Socket.IO or MQTT: a long-lived connection with a message log.
     pub fn is_socket(&self) -> bool {
-        self.is_websocket() || self.is_socket_io()
+        self.is_websocket() || self.is_socket_io() || self.is_mqtt()
     }
 
     pub fn is_grpc(&self) -> bool {
@@ -429,7 +679,8 @@ impl Request {
         match scheme.as_deref() {
             Some("ws" | "wss") if !self.is_socket() => self.method = WEBSOCKET.into(),
             Some("grpc" | "grpcs") => self.method = GRPC.into(),
-            Some("http" | "https") if self.is_websocket() || self.is_grpc() => self.method = "GET".into(),
+            Some("mqtt" | "mqtts") => self.method = MQTT.into(),
+            Some("http" | "https") if self.is_websocket() || self.is_grpc() || self.is_mqtt() => self.method = "GET".into(),
             _ => {}
         }
         self.params = params_from_url(&url, &self.params);
@@ -493,7 +744,148 @@ pub fn url_with_params(url: &str, params: &[KeyValue]) -> String {
     }
 }
 
-/// Replaces `{{name}}` with the last matching variable; unknown names stay as written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    Globals,
+    Collection,
+    Environment,
+    /// `vars.set` / `pm.variables.set`: lasts for one request (or one runner iteration).
+    Local,
+}
+
+/// A variable a script set (`Some`) or unset (`None`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct VarWrite {
+    pub scope: Scope,
+    pub key: String,
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Scopes {
+    pub globals: Vec<(String, String)>,
+    pub collection: Vec<(String, String)>,
+    /// `None` when no environment is selected.
+    pub environment: Option<Vec<(String, String)>>,
+    /// Runner data file row for this iteration.
+    pub data: Vec<(String, String)>,
+    pub local: Vec<(String, String)>,
+}
+
+impl Scopes {
+    /// Lowest priority first, so `resolve` (last match wins) picks local over data over environment and so on.
+    pub fn merged(&self) -> Vec<(String, String)> {
+        let mut vars = self.globals.clone();
+        vars.extend(self.collection.iter().cloned());
+        vars.extend(self.environment.iter().flatten().cloned());
+        vars.extend(self.data.iter().cloned());
+        vars.extend(self.local.iter().cloned());
+        vars
+    }
+
+    /// Applies writes to these in-memory scopes, e.g. between the requests of a run.
+    pub fn apply(&mut self, writes: &[VarWrite]) {
+        for w in writes {
+            let list = match w.scope {
+                Scope::Globals => &mut self.globals,
+                Scope::Collection => &mut self.collection,
+                Scope::Environment => match &mut self.environment {
+                    Some(env) => env,
+                    None => continue,
+                },
+                Scope::Local => &mut self.local,
+            };
+            list.retain(|(k, _)| *k != w.key);
+            if let Some(value) = &w.value {
+                list.push((w.key.clone(), value.clone()));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Found {
+    Request(u64),
+    Collection(u64),
+    Folder(u64),
+    Environment(u64),
+    /// Index into the history list.
+    History(usize),
+}
+
+/// One search result: what it is, its name, and where it lives (path or URL).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchHit {
+    pub found: Found,
+    pub title: String,
+    pub detail: String,
+    pub method: Option<String>,
+}
+
+/// Lower is better: name starts with the query, a word in the name does, the name contains it, then anything else.
+fn search_rank(title: &str, haystack: &str, terms: &[String]) -> Option<u8> {
+    if !terms.iter().all(|t| haystack.contains(t.as_str())) {
+        return None;
+    }
+    let title = title.to_lowercase();
+    let first = &terms[0];
+    Some(if title.starts_with(first.as_str()) {
+        0
+    } else if title.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(first.as_str())) {
+        1
+    } else if terms.iter().all(|t| title.contains(t.as_str())) {
+        2
+    } else {
+        3
+    })
+}
+
+/// Updates or appends `key` in a variable table; `None` removes it.
+fn set_var(values: &mut Vec<KeyValue>, key: &str, value: Option<&str>) {
+    match (values.iter().position(|v| v.key == key), value) {
+        (Some(i), Some(value)) => {
+            values[i].value = value.into();
+            values[i].enabled = true;
+        }
+        (Some(i), None) => {
+            values.remove(i);
+        }
+        (None, Some(value)) => values.push(KeyValue::new(key, value)),
+        (None, None) => {}
+    }
+}
+
+/// Postman's built-in `{{$name}}` values; a new value on every use.
+fn dynamic_variable(name: &str) -> Option<String> {
+    let random = |n: usize| {
+        let mut bytes = vec![0_u8; n];
+        let _ = getrandom::fill(&mut bytes);
+        bytes
+    };
+    let pick = |alphabet: &[u8], n: usize| random(n).iter().map(|b| alphabet[*b as usize % alphabet.len()] as char).collect::<String>();
+    let now = chrono::Utc::now();
+    Some(match name {
+        "$guid" | "$randomUUID" => {
+            let mut b = random(16);
+            b[6] = (b[6] & 0x0f) | 0x40;
+            b[8] = (b[8] & 0x3f) | 0x80;
+            let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
+        }
+        "$timestamp" => now.timestamp().to_string(),
+        "$isoTimestamp" => now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "$randomInt" => (u16::from_le_bytes([random(1)[0], random(1)[0]]) % 1001).to_string(),
+        "$randomBoolean" => (random(1)[0] % 2 == 0).to_string(),
+        "$randomAlphaNumeric" => pick(b"abcdefghijklmnopqrstuvwxyz0123456789", 1),
+        "$randomHexadecimal" => pick(b"0123456789abcdef", 1),
+        "$randomEmail" => format!("{}@example.com", pick(b"abcdefghijklmnopqrstuvwxyz", 10)),
+        "$randomUserName" => pick(b"abcdefghijklmnopqrstuvwxyz0123456789", 10),
+        "$randomPassword" => pick(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", 15),
+        _ => return None,
+    })
+}
+
+/// Replaces `{{name}}` with the last matching variable, then Postman's `{{$dynamic}}` values; unknown names stay as written.
 pub fn resolve(source: &str, vars: &[(String, String)]) -> String {
     let mut out = String::with_capacity(source.len());
     let mut rest = source;
@@ -507,7 +899,10 @@ pub fn resolve(source: &str, vars: &[(String, String)]) -> String {
         let name = tail[..end].trim();
         match vars.iter().rev().find(|(key, _)| key == name) {
             Some((_, value)) => out.push_str(value),
-            None => out.push_str(&rest[start..start + 2 + end + 2]),
+            None => match dynamic_variable(name) {
+                Some(value) => out.push_str(&value),
+                None => out.push_str(&rest[start..start + 2 + end + 2]),
+            },
         }
         rest = &tail[end + 2..];
     }
@@ -528,6 +923,8 @@ pub struct Folder {
     pub items: Vec<Item>,
     #[serde(default)]
     pub expanded: bool,
+    #[serde(default, skip_serializing_if = "Scripts::is_empty")]
+    pub scripts: Scripts,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -547,6 +944,8 @@ pub struct Collection {
     pub variables: Vec<KeyValue>,
     #[serde(default)]
     pub expanded: bool,
+    #[serde(default, skip_serializing_if = "Scripts::is_empty")]
+    pub scripts: Scripts,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -583,6 +982,8 @@ pub struct Workspace {
     pub next_id: u64,
     pub globals: Vec<KeyValue>,
     pub settings: Settings,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cookies: Vec<StoredCookie>,
 }
 
 /// The parts of a workspace that are synced to the server; history, theme and settings stay on this machine.
@@ -799,6 +1200,7 @@ impl Workspace {
             items: Vec::new(),
             variables: Vec::new(),
             expanded: true,
+            scripts: Scripts::default(),
         });
         id
     }
@@ -831,6 +1233,11 @@ impl Workspace {
 
     /// Variables for a send: globals, then collection variables, then the active environment; later wins.
     pub fn variables(&self, request_id: Option<u64>) -> Vec<(String, String)> {
+        self.scopes(request_id).merged()
+    }
+
+    /// Each variable scope a request sees, kept apart so scripts can read and write them separately.
+    pub fn scopes(&self, request_id: Option<u64>) -> Scopes {
         let enabled = |values: &[KeyValue]| {
             values
                 .iter()
@@ -838,17 +1245,165 @@ impl Workspace {
                 .map(|v| (v.key.clone(), v.value.clone()))
                 .collect::<Vec<_>>()
         };
-        let mut vars = enabled(&self.globals);
-        if let Some((c, _)) = request_id.and_then(|id| self.request(id)) {
-            vars.extend(enabled(&c.variables));
+        let collection = request_id.and_then(|id| self.request(id)).map(|(c, _)| c);
+        let env = self.active_environment.and_then(|id| self.environments.iter().find(|e| e.id == id));
+        Scopes {
+            globals: enabled(&self.globals),
+            collection: collection.map(|c| enabled(&c.variables)).unwrap_or_default(),
+            environment: env.map(|e| enabled(&e.values)),
+            ..Scopes::default()
         }
-        if let Some(env) = self
-            .active_environment
-            .and_then(|id| self.environments.iter().find(|e| e.id == id))
-        {
-            vars.extend(enabled(&env.values));
+    }
+
+    /// Saves variables a script set or unset. Collection writes go to the request's collection.
+    pub fn apply_writes(&mut self, request_id: Option<u64>, writes: &[VarWrite]) {
+        let collection = request_id.and_then(|id| self.request(id)).map(|(c, _)| c.id);
+        for w in writes {
+            let target = match w.scope {
+                Scope::Globals => Some(&mut self.globals),
+                Scope::Environment => match self.active_environment {
+                    Some(id) => self.environments.iter_mut().find(|e| e.id == id).map(|e| &mut e.values),
+                    None => None,
+                },
+                Scope::Collection => match collection {
+                    Some(id) => self.collections.iter_mut().find(|c| c.id == id).map(|c| &mut c.variables),
+                    None => None,
+                },
+                Scope::Local => None,
+            };
+            if let Some(values) = target {
+                set_var(values, &w.key, w.value.as_deref());
+            }
         }
-        vars
+    }
+
+    /// Everything matching `query` (every word must appear), best first. An empty query lists recent history.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if terms.is_empty() {
+            return self
+                .history
+                .iter()
+                .enumerate()
+                .take(limit)
+                .map(|(ix, h)| SearchHit {
+                    found: Found::History(ix),
+                    title: h.request.title(),
+                    detail: "Recent".into(),
+                    method: Some(h.request.method.clone()),
+                })
+                .collect();
+        }
+        let mut hits: Vec<(u8, u8, SearchHit)> = Vec::new();
+        let mut add = |kind: u8, hit: SearchHit, extra: &str| {
+            let haystack = format!("{} {} {} {extra}", hit.title, hit.detail, hit.method.as_deref().unwrap_or_default()).to_lowercase();
+            if let Some(rank) = search_rank(&hit.title, &haystack, &terms) {
+                hits.push((rank, kind, hit));
+            }
+        };
+        fn walk(items: &[Item], path: &str, add: &mut dyn FnMut(u8, SearchHit, &str)) {
+            for item in items {
+                match item {
+                    Item::Request(r) => add(
+                        0,
+                        SearchHit {
+                            found: Found::Request(r.id),
+                            title: r.request.title(),
+                            detail: format!("{path} · {}", r.request.url),
+                            method: Some(r.request.method.clone()),
+                        },
+                        &r.request.description,
+                    ),
+                    Item::Folder(f) => {
+                        add(1, SearchHit { found: Found::Folder(f.id), title: f.name.clone(), detail: format!("Folder in {path}"), method: None }, "");
+                        walk(&f.items, &format!("{path} / {}", f.name), add);
+                    }
+                }
+            }
+        }
+        for c in &self.collections {
+            add(1, SearchHit { found: Found::Collection(c.id), title: c.name.clone(), detail: "Collection".into(), method: None }, "");
+            walk(&c.items, &c.name, &mut add);
+        }
+        for e in &self.environments {
+            add(2, SearchHit { found: Found::Environment(e.id), title: e.name.clone(), detail: "Environment".into(), method: None }, "");
+        }
+        add(2, SearchHit { found: Found::Environment(GLOBALS_ID), title: "Globals".into(), detail: "Variables".into(), method: None }, "");
+        // Saved requests already cover what history would repeat, so only unsaved URLs come from history.
+        let mut seen = std::collections::HashSet::new();
+        for (ix, h) in self.history.iter().enumerate() {
+            if seen.insert((h.request.method.clone(), h.request.url.clone())) {
+                add(3, SearchHit { found: Found::History(ix), title: h.request.title(), detail: "History".into(), method: Some(h.request.method.clone()) }, "");
+            }
+        }
+        hits.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        hits.into_iter().map(|(_, _, hit)| hit).take(limit).collect()
+    }
+
+    /// Expands the collection and folders leading to `id` (and `id` itself) so the sidebar shows it.
+    pub fn reveal(&mut self, id: u64) {
+        fn walk(items: &mut [Item], id: u64) -> bool {
+            items.iter_mut().any(|item| match item {
+                Item::Request(r) => r.id == id,
+                Item::Folder(f) => {
+                    let hit = f.id == id || walk(&mut f.items, id);
+                    f.expanded |= hit;
+                    hit
+                }
+            })
+        }
+        for c in &mut self.collections {
+            if c.id == id || walk(&mut c.items, id) {
+                c.expanded = true;
+                return;
+            }
+        }
+    }
+
+    /// Name and scripts of a collection or folder.
+    pub fn scripts_of(&self, id: u64) -> Option<(String, &Scripts)> {
+        fn find(items: &[Item], id: u64) -> Option<&Folder> {
+            items.iter().find_map(|item| match item {
+                Item::Folder(f) if f.id == id => Some(f),
+                Item::Folder(f) => find(&f.items, id),
+                Item::Request(_) => None,
+            })
+        }
+        if let Some(c) = self.collections.iter().find(|c| c.id == id) {
+            return Some((c.name.clone(), &c.scripts));
+        }
+        self.collections.iter().find_map(|c| find(&c.items, id)).map(|f| (f.name.clone(), &f.scripts))
+    }
+
+    pub fn scripts_of_mut(&mut self, id: u64) -> Option<&mut Scripts> {
+        if let Some(i) = self.collections.iter().position(|c| c.id == id) {
+            return Some(&mut self.collections[i].scripts);
+        }
+        self.collections.iter_mut().find_map(|c| folder_in_mut(&mut c.items, id)).map(|f| &mut f.scripts)
+    }
+
+    /// Collection and folder scripts that wrap a saved request, outermost first.
+    pub fn script_chain(&self, request_id: u64) -> Vec<(String, Scripts)> {
+        fn walk(items: &[Item], id: u64, chain: &mut Vec<(String, Scripts)>) -> bool {
+            items.iter().any(|item| match item {
+                Item::Request(r) => r.id == id,
+                Item::Folder(f) => {
+                    chain.push((format!("Folder \"{}\"", f.name), f.scripts.clone()));
+                    walk(&f.items, id, chain) || {
+                        chain.pop();
+                        false
+                    }
+                }
+            })
+        }
+        for c in &self.collections {
+            let mut chain = vec![(format!("Collection \"{}\"", c.name), c.scripts.clone())];
+            if walk(&c.items, request_id, &mut chain) {
+                chain.retain(|(_, s)| !s.is_empty());
+                return chain;
+            }
+        }
+        Vec::new()
     }
 
     /// Name and variables of an environment, a collection, or the globals (`GLOBALS_ID`).
@@ -897,6 +1452,7 @@ impl Workspace {
             items,
             variables: kv_from_postman(doc.get("variable")),
             expanded: true,
+            scripts: scripts_from_postman(doc.get("event")),
         });
         Ok(id)
     }
@@ -922,12 +1478,14 @@ impl Workspace {
                         name,
                         items: children,
                         expanded: false,
+                        scripts: scripts_from_postman(item.get("event")),
                     })
                 } else {
                     let mut request =
                         request_from_postman(item.get("request").unwrap_or(&Value::Null));
                     request.name = name;
                     request.examples = examples_from_postman(item.get("response"));
+                    request.scripts = scripts_from_postman(item.get("event"));
                     if request.auth == Auth::None && item.pointer("/request/auth").is_none() {
                         request.auth = inherited.cloned().unwrap_or_default();
                     }
@@ -946,6 +1504,7 @@ impl Workspace {
             "info": { "name": c.name },
             "item": items_to_postman(&c.items),
             "variable": kv_to_postman(&c.variables),
+            "event": scripts_to_postman(&c.scripts),
         });
         serde_json::to_string_pretty(&doc).ok()
     }
@@ -980,6 +1539,62 @@ fn kv_from_postman(value: Option<&Value>) -> Vec<KeyValue> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A Postman environment or globals export: `{name, values: [{key, value, enabled}]}`.
+pub fn environment_from_postman(doc: &Value) -> Option<(String, Vec<KeyValue>)> {
+    if doc.get("info").is_some() {
+        return None;
+    }
+    let rows = doc.get("values")?.as_array()?;
+    let name = doc.get("name").and_then(Value::as_str).unwrap_or("Imported environment").to_string();
+    let values = rows
+        .iter()
+        .filter_map(|r| {
+            Some(KeyValue {
+                key: r.get("key")?.as_str()?.into(),
+                value: match r.get("value") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Null) | None => String::new(),
+                    Some(other) => other.to_string(),
+                },
+                enabled: r.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                file: false,
+            })
+        })
+        .collect();
+    Some((name, values))
+}
+
+pub fn environment_to_postman(name: &str, values: &[KeyValue]) -> String {
+    let values: Vec<Value> = values.iter().map(|v| json!({"key": v.key, "value": v.value, "enabled": v.enabled})).collect();
+    serde_json::to_string_pretty(&json!({"name": name, "values": values})).unwrap_or_default()
+}
+
+/// Postman `event` arrays: `{listen: "prerequest" | "test", script: {exec: [lines] | "text"}}`.
+fn scripts_from_postman(value: Option<&Value>) -> Scripts {
+    let mut scripts = Scripts::default();
+    for event in value.and_then(Value::as_array).into_iter().flatten() {
+        let source = match event.pointer("/script/exec") {
+            Some(Value::Array(lines)) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+            Some(Value::String(s)) => s.clone(),
+            _ => continue,
+        };
+        match event.get("listen").and_then(Value::as_str) {
+            Some("prerequest") => scripts.pre_request = source,
+            Some("test") => scripts.test = source,
+            _ => {}
+        }
+    }
+    scripts
+}
+
+fn scripts_to_postman(scripts: &Scripts) -> Value {
+    [("prerequest", &scripts.pre_request), ("test", &scripts.test)]
+        .into_iter()
+        .filter(|(_, source)| !source.trim().is_empty())
+        .map(|(listen, source)| json!({"listen": listen, "script": {"type": "text/javascript", "exec": source.lines().collect::<Vec<_>>()}}))
+        .collect()
 }
 
 fn examples_from_postman(value: Option<&Value>) -> Vec<Example> {
@@ -1045,8 +1660,13 @@ fn auth_from_postman(auth: &Value) -> Auth {
                 header_prefix: or(f("headerPrefix"), d.header_prefix),
                 grant_type: match f("grant_type").as_str() {
                     "password_credentials" => "password".into(),
+                    "authorization_code" => "authorization_code".into(),
+                    "authorization_code_with_pkce" => "authorization_code_pkce".into(),
                     _ => d.grant_type,
                 },
+                auth_url: f("authUrl"),
+                callback_url: f("redirect_uri"),
+                client_auth: if f("client_authentication") == "body" { "body".into() } else { d.client_auth },
                 token_url: f("accessTokenUrl"),
                 client_id: f("clientId"),
                 client_secret: f("clientSecret"),
@@ -1064,6 +1684,48 @@ fn auth_from_postman(auth: &Value) -> Auth {
                 service: f("service"),
                 session_token: f("sessionToken"),
             }
+        }
+        Some("jwt") => {
+            let f = |key| auth_field(auth, "jwt", key);
+            let d = Jwt::default();
+            let or = |v: String, default: String| if v.is_empty() { default } else { v };
+            Auth::Jwt(Jwt {
+                algorithm: or(f("algorithm"), d.algorithm),
+                secret: or(f("secret"), f("privateKey")),
+                secret_encoding: if f("isSecretBase64Encoded") == "true" { "base64".into() } else { d.secret_encoding },
+                payload: or(f("payload"), d.payload),
+                headers: or(f("header"), d.headers),
+                header_prefix: or(f("headerPrefix"), d.header_prefix),
+                add_to: if f("addTokenTo") == "queryParam" { "query".into() } else { d.add_to },
+                query_key: or(f("queryParamKey"), d.query_key),
+            })
+        }
+        Some("oauth1") => {
+            let f = |key| auth_field(auth, "oauth1", key);
+            let method = f("signatureMethod");
+            Auth::OAuth1(OAuth1 {
+                consumer_key: f("consumerKey"),
+                consumer_secret: f("consumerSecret"),
+                token: f("token"),
+                token_secret: f("tokenSecret"),
+                signature_method: if method.is_empty() { OAuth1::default().signature_method } else { method },
+                realm: f("realm"),
+                add_to: if f("addParamsToHeader") == "false" { "query".into() } else { "header".into() },
+            })
+        }
+        Some("hawk") => {
+            let f = |key| auth_field(auth, "hawk", key);
+            let algorithm = f("algorithm");
+            Auth::Hawk(Hawk {
+                id: f("authId"),
+                key: f("authKey"),
+                algorithm: if algorithm.is_empty() { "sha256".into() } else { algorithm },
+                ext: f("extraData"),
+            })
+        }
+        Some("ntlm") => {
+            let f = |key| auth_field(auth, "ntlm", key);
+            Auth::Ntlm(Ntlm { username: f("username"), password: f("password"), domain: f("domain"), workstation: f("workstation") })
         }
         _ => Auth::None,
     }
@@ -1088,7 +1750,15 @@ fn auth_to_postman(auth: &Auth) -> Value {
         Auth::OAuth2(o) => json!({"type": "oauth2", "oauth2": rows(&[
             ("accessToken", &o.access_token),
             ("headerPrefix", &o.header_prefix),
-            ("grant_type", if o.grant_type == "password" { "password_credentials" } else { "client_credentials" }),
+            ("grant_type", match o.grant_type.as_str() {
+                "password" => "password_credentials",
+                "authorization_code_pkce" => "authorization_code_with_pkce",
+                "authorization_code" => "authorization_code",
+                _ => "client_credentials",
+            }),
+            ("authUrl", &o.auth_url),
+            ("redirect_uri", &o.callback_url),
+            ("client_authentication", if o.client_auth == "body" { "body" } else { "header" }),
             ("accessTokenUrl", &o.token_url),
             ("clientId", &o.client_id),
             ("clientSecret", &o.client_secret),
@@ -1102,6 +1772,38 @@ fn auth_to_postman(auth: &Auth) -> Value {
             ("region", region),
             ("service", service),
             ("sessionToken", session_token),
+        ])}),
+        Auth::Jwt(j) => json!({"type": "jwt", "jwt": rows(&[
+            ("algorithm", &j.algorithm),
+            (if j.algorithm.starts_with("HS") { "secret" } else { "privateKey" }, &j.secret),
+            ("isSecretBase64Encoded", if j.secret_encoding == "base64" { "true" } else { "false" }),
+            ("payload", &j.payload),
+            ("header", &j.headers),
+            ("headerPrefix", &j.header_prefix),
+            ("addTokenTo", if j.add_to == "query" { "queryParam" } else { "header" }),
+            ("queryParamKey", &j.query_key),
+        ])}),
+        Auth::OAuth1(o) => json!({"type": "oauth1", "oauth1": rows(&[
+            ("consumerKey", &o.consumer_key),
+            ("consumerSecret", &o.consumer_secret),
+            ("token", &o.token),
+            ("tokenSecret", &o.token_secret),
+            ("signatureMethod", &o.signature_method),
+            ("realm", &o.realm),
+            ("addParamsToHeader", if o.add_to == "query" { "false" } else { "true" }),
+            ("version", "1.0"),
+        ])}),
+        Auth::Hawk(h) => json!({"type": "hawk", "hawk": rows(&[
+            ("authId", &h.id),
+            ("authKey", &h.key),
+            ("algorithm", &h.algorithm),
+            ("extraData", &h.ext),
+        ])}),
+        Auth::Ntlm(n) => json!({"type": "ntlm", "ntlm": rows(&[
+            ("username", &n.username),
+            ("password", &n.password),
+            ("domain", &n.domain),
+            ("workstation", &n.workstation),
         ])}),
     }
 }
@@ -1215,9 +1917,10 @@ fn items_to_postman(items: &[Item]) -> Value {
     items
         .iter()
         .map(|item| match item {
-            Item::Folder(f) => json!({"name": f.name, "item": items_to_postman(&f.items)}),
+            Item::Folder(f) => json!({"name": f.name, "item": items_to_postman(&f.items), "event": scripts_to_postman(&f.scripts)}),
             Item::Request(r) => json!({
                 "name": r.request.name,
+                "event": scripts_to_postman(&r.request.scripts),
                 "request": request_to_postman(&r.request),
                 "response": r.request.examples.iter().map(|e| json!({
                     "name": e.name,
@@ -1580,6 +2283,16 @@ pub fn to_curl(r: &Request, vars: &[(String, String)]) -> String {
                 shell_quote(&format!("{}:{}", resolve(access_key, vars), resolve(secret_key, vars)))
             ));
         }
+        Auth::Jwt(j) if j.add_to != "query" => {
+            if let Ok(token) = crate::auth::jwt(j, vars) {
+                parts.push(header("Authorization", format!("{} {token}", resolve(&j.header_prefix, vars)).trim()));
+            }
+        }
+        Auth::Ntlm(n) => {
+            let domain = resolve(&n.domain, vars);
+            let user = if domain.is_empty() { resolve(&n.username, vars) } else { format!("{domain}\\{}", resolve(&n.username, vars)) };
+            parts.push(format!("--ntlm --user {}", shell_quote(&format!("{user}:{}", resolve(&n.password, vars)))));
+        }
         _ => {}
     }
     match r.body_mode {
@@ -1742,12 +2455,122 @@ mod tests {
     }
 
     #[test]
+    fn search_ranks_names_first_and_reveals_folders() {
+        let mut ws = Workspace::default();
+        let c = ws.add_collection("Payments API");
+        let mut get = Request::default();
+        get.name = "List invoices".into();
+        get.url = "https://pay.example.com/invoices".into();
+        let mut create = Request::default();
+        create.name = "Create customer".into();
+        create.method = "POST".into();
+        create.url = "https://pay.example.com/customers?invoice=1".into();
+        let (a, b, folder) = (ws.alloc_id(), ws.alloc_id(), ws.alloc_id());
+        ws.collections[0].items.push(Item::Folder(Folder {
+            id: folder,
+            name: "Billing".into(),
+            items: vec![Item::Request(SavedRequest { id: a, request: get }), Item::Request(SavedRequest { id: b, request: create })],
+            expanded: false,
+            scripts: Scripts::default(),
+        }));
+        ws.environments.push(Environment { id: 50, name: "Billing staging".into(), values: vec![] });
+
+        let found = |q: &str| ws.search(q, 10).into_iter().map(|h| h.found).collect::<Vec<_>>();
+        assert_eq!(found("invoice"), [Found::Request(a), Found::Request(b)], "name match beats URL match");
+        assert_eq!(found("billing"), [Found::Folder(folder), Found::Environment(50), Found::Request(a), Found::Request(b)]);
+        assert_eq!(found("post customer"), [Found::Request(b)], "every word must match, method included");
+        assert_eq!(found("payments"), [Found::Collection(c), Found::Request(a), Found::Request(b), Found::Folder(folder)]);
+        assert!(found("nothing-like-this").is_empty());
+        assert_eq!(ws.search(&ws.search("list", 1)[0].detail, 5).len(), 1, "the path and URL are searchable");
+
+        ws.reveal(a);
+        let Item::Folder(f) = &ws.collections[0].items[0] else { panic!() };
+        assert!(f.expanded && ws.collections[0].expanded);
+    }
+
+    #[test]
+    fn new_auth_types_survive_postman_import_and_export() {
+        let auths = [
+            Auth::Jwt(Jwt { algorithm: "RS256".into(), secret: "key.pem".into(), add_to: "query".into(), ..Jwt::default() }),
+            Auth::OAuth1(OAuth1 { consumer_key: "ck".into(), signature_method: "HMAC-SHA256".into(), realm: "r".into(), ..OAuth1::default() }),
+            Auth::Hawk(Hawk { id: "i".into(), key: "k".into(), algorithm: "sha1".into(), ext: "e".into() }),
+            Auth::Ntlm(Ntlm { username: "u".into(), password: "p".into(), domain: "D".into(), workstation: "W".into() }),
+            Auth::OAuth2(OAuth2 {
+                grant_type: "authorization_code_pkce".into(),
+                auth_url: "https://id/authorize".into(),
+                callback_url: "http://localhost:5000/cb".into(),
+                client_auth: "body".into(),
+                ..OAuth2::default()
+            }),
+        ];
+        for auth in auths {
+            assert_eq!(auth_from_postman(&auth_to_postman(&auth)), auth);
+            assert_eq!(Auth::from_index(auth.index()).index(), auth.index());
+        }
+        let mut r = Request::default();
+        r.url = "http://x".into();
+        r.auth = Auth::Ntlm(Ntlm { username: "u".into(), password: "p".into(), domain: "D".into(), workstation: String::new() });
+        assert!(to_curl(&r, &[]).contains(r"--ntlm --user 'D\u:p'"), "{}", to_curl(&r, &[]));
+    }
+
+    #[test]
+    fn scripts_survive_postman_import_and_export() {
+        let doc = r#"{
+            "info": {"name": "S"},
+            "event": [{"listen": "prerequest", "script": {"exec": ["a();", "b();"]}}],
+            "item": [{"name": "F", "event": [{"listen": "test", "script": {"exec": "f();"}}],
+                      "item": [{"name": "R", "event": [{"listen": "test", "script": {"exec": ["pm.test('x', () => {});"]}}],
+                                "request": {"method": "GET", "url": "http://x"}}]}]
+        }"#;
+        let mut ws = Workspace::default();
+        let id = ws.import_postman(doc).unwrap();
+        let c = &ws.collections[0];
+        assert_eq!(c.scripts.pre_request, "a();\nb();");
+        let Item::Folder(f) = &c.items[0] else { panic!() };
+        assert_eq!(f.scripts.test, "f();");
+        let Item::Request(r) = &f.items[0] else { panic!() };
+        assert_eq!(ws.script_chain(r.id).len(), 2, "collection and folder wrap the request");
+        assert_eq!(ws.scripts_of(f.id).unwrap().0, "F");
+
+        let mut again = Workspace::default();
+        again.import_postman(&ws.export_postman(id).unwrap()).unwrap();
+        assert_eq!(again.collections[0].scripts, ws.collections[0].scripts);
+        let Item::Folder(f2) = &again.collections[0].items[0] else { panic!() };
+        let Item::Request(r2) = &f2.items[0] else { panic!() };
+        assert_eq!(r2.request.scripts.test, "pm.test('x', () => {});");
+    }
+
+    #[test]
+    fn dynamic_variables_resolve_unless_defined() {
+        let guid = resolve("{{$guid}}", &[]);
+        assert_eq!(guid.len(), 36);
+        assert_ne!(guid, resolve("{{$guid}}", &[]));
+        assert!(resolve("{{$timestamp}}", &[]).parse::<i64>().is_ok());
+        assert_eq!(resolve("{{$guid}}", &[("$guid".into(), "fixed".into())]), "fixed");
+        assert_eq!(resolve("{{$nope}}", &[]), "{{$nope}}");
+    }
+
+    #[test]
+    fn listens_to_listed_socket_io_events_only() {
+        let mut r = Request::default();
+        assert!(r.listens_to("anything"), "no events listed shows them all");
+        r.socket_events = vec![KeyValue::new("news", ""), KeyValue { enabled: false, ..KeyValue::new("chat", "") }];
+        assert!(r.listens_to("news"));
+        assert!(!r.listens_to("chat"), "unchecked events are muted");
+        assert!(!r.listens_to("other"));
+    }
+
+    #[test]
     fn url_scheme_switches_between_http_and_websocket() {
         let mut r = Request::default();
         r.set_url("WSS://example.com/live".into());
         assert!(r.is_websocket());
         r.set_url("example.com".into());
         assert!(r.is_websocket(), "no scheme keeps the current kind");
+        r.set_url("https://example.com".into());
+        assert_eq!(r.method, "GET");
+        r.set_url("mqtts://broker.example.com".into());
+        assert!(r.is_mqtt() && r.is_socket());
         r.set_url("https://example.com".into());
         assert_eq!(r.method, "GET");
         r.method = "POST".into();

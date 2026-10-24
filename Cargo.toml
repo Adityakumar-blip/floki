@@ -1,6 +1,6 @@
 [package]
 name = "floki"
-version = "0.1.1"
+version = "0.4.0"
 edition = "2021"
 description = "A fast, local-first API workbench built with Rust and GPUI"
 
@@ -10,12 +10,14 @@ gpui-kit = "0.8.0"
 gpui-component = { version = "0.8.0", features = ["tree-sitter", "tree-sitter-html", "tree-sitter-javascript", "tree-sitter-bash"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "brotli", "deflate", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "brotli", "deflate", "multipart", "cookies"] }
 futures = "0.3"
 dirs = "6"
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+# Trusted CAs for MQTT over TLS; same version tungstenite already uses.
+webpki-roots = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 base64 = "0.22"
 # Digest and AWS Signature auth.
@@ -41,6 +43,10 @@ tokio = { version = "1", features = ["rt", "net", "time"] }
 
 # Window icon on X11; same major version GPUI uses, so no extra build.
 image = { version = "0.25", default-features = false, features = ["png"] }
+boa_engine = "0.22"
+sha1 = "0.10"
+md4 = "0.10"
+ring = "0.17"
 
 [build-dependencies]
 # Embeds the app icon in the Windows .exe.

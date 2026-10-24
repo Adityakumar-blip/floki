@@ -22,6 +22,7 @@ pub enum Command {
     Binary(Vec<u8>),
     /// Socket.IO event; `data` is sent as JSON when it parses, else as a string.
     Emit { event: String, data: String, ack: bool },
+    Publish { topic: String, payload: Vec<u8>, qos: u8, retain: bool },
     Close,
 }
 
@@ -36,14 +37,14 @@ pub enum Event {
     Failed(String),
 }
 
-enum End {
+pub(crate) enum End {
     /// Finished; the final event was already emitted.
     Stop,
     /// Dropped unexpectedly; `connected` says whether the handshake had succeeded.
     Lost { reason: String, connected: bool },
 }
 
-/// Opens the WebSocket or Socket.IO connection described by `request` and pumps it until it closes
+/// Opens the WebSocket, Socket.IO or MQTT connection described by `request` and pumps it until it closes
 /// or `commands` is dropped, reconnecting per the request's settings. Blocking; run it on its own thread.
 pub fn run(request: &Request, vars: &[(String, String)], commands: Receiver<Command>, events: UnboundedSender<Event>) {
     let emit = |event| {
@@ -83,6 +84,9 @@ pub fn run(request: &Request, vars: &[(String, String)], commands: Receiver<Comm
 }
 
 fn session(request: &Request, vars: &[(String, String)], commands: &Receiver<Command>, emit: &impl Fn(Event)) -> End {
+    if request.is_mqtt() {
+        return crate::mqtt::session(request, vars, commands, emit);
+    }
     let (mut socket, tcp, status, headers, namespace) = match connect(request, vars) {
         Ok(parts) => parts,
         Err(reason) => return End::Lost { reason, connected: false },
@@ -131,7 +135,7 @@ fn session(request: &Request, vars: &[(String, String)], commands: &Receiver<Com
                 closing = Some(Instant::now());
                 None
             }
-            Ok(Command::Close) | Err(TryRecvError::Empty) => None,
+            Ok(Command::Close | Command::Publish { .. }) | Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
                 // The tab went away; nobody is listening for the close handshake.
                 let _ = socket.close(None);
@@ -307,23 +311,8 @@ fn connect(
         );
     }
 
-    let timeout = Some(Duration::from_millis(request.socket.handshake_timeout_ms)).filter(|t| !t.is_zero());
-    let addrs = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("Could not resolve {host}: {e}"))?;
-    let mut last_error = format!("Could not resolve {host}");
-    let tcp = addrs
-        .into_iter()
-        .find_map(|addr| {
-            match timeout {
-                Some(t) => TcpStream::connect_timeout(&addr, t),
-                None => TcpStream::connect(addr),
-            }
-            .map_err(|e| last_error = format!("Could not connect to {addr}: {e}"))
-            .ok()
-        })
-        .ok_or(last_error)?;
-    tcp.set_read_timeout(timeout).map_err(|e| e.to_string())?;
-    tcp.set_write_timeout(timeout).map_err(|e| e.to_string())?;
-    let _ = tcp.set_nodelay(true);
+    let timeout = handshake_timeout(request);
+    let tcp = tcp_connect(&host, port, timeout)?;
     let handle = tcp.try_clone().map_err(|e| e.to_string())?;
     let max = (request.socket.max_message_mb.max(1) as usize).saturating_mul(1024 * 1024);
     let config = WebSocketConfig::default().max_message_size(Some(max)).max_frame_size(Some(max));
@@ -348,20 +337,53 @@ fn connect(
     Ok((socket, handle, status, headers, namespace))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn handshake_timeout(request: &Request) -> Option<Duration> {
+    Some(Duration::from_millis(request.socket.handshake_timeout_ms)).filter(|t| !t.is_zero())
+}
+
+/// Connects to the first reachable address; reads and writes time out after `timeout`.
+pub(crate) fn tcp_connect(host: &str, port: u16, timeout: Option<Duration>) -> Result<TcpStream, String> {
+    let addrs = (host, port).to_socket_addrs().map_err(|e| format!("Could not resolve {host}: {e}"))?;
+    let mut last_error = format!("Could not resolve {host}");
+    let tcp = addrs
+        .into_iter()
+        .find_map(|addr| {
+            match timeout {
+                Some(t) => TcpStream::connect_timeout(&addr, t),
+                None => TcpStream::connect(addr),
+            }
+            .map_err(|e| last_error = format!("Could not connect to {addr}: {e}"))
+            .ok()
+        })
+        .ok_or(last_error)?;
+    tcp.set_read_timeout(timeout).map_err(|e| e.to_string())?;
+    tcp.set_write_timeout(timeout).map_err(|e| e.to_string())?;
+    let _ = tcp.set_nodelay(true);
+    Ok(tcp)
+}
+
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
 }
 
 /// TLS that skips certificate checks, for the "SSL certificate verification" setting being off.
 fn insecure_connector() -> Connector {
+    Connector::Rustls(tls_config(false))
+}
+
+/// rustls client config on the ring provider; `verify` false accepts any certificate.
+pub(crate) fn tls_config(verify: bool) -> Arc<rustls::ClientConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
-        .expect("ring supports the default TLS versions")
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAnyCert(provider)))
-        .with_no_client_auth();
-    Connector::Rustls(Arc::new(config))
+        .expect("ring supports the default TLS versions");
+    let config = if verify {
+        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+        builder.with_root_certificates(roots).with_no_client_auth()
+    } else {
+        builder.dangerous().with_custom_certificate_verifier(Arc::new(AcceptAnyCert(provider))).with_no_client_auth()
+    };
+    Arc::new(config)
 }
 
 #[derive(Debug)]

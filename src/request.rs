@@ -2,9 +2,10 @@ use crate::http::{self, format_size};
 use crate::kv::{cell, KvChanged, KvEditor};
 use crate::model::{
     parse_curl, parse_relaxed_json, resolve, Auth, Example, KeyValue, BinaryEncoding, BodyMode, HistoryEntry, RawLanguage, Request,
-    GRPC, METHODS, SOCKET_IO, WEBSOCKET,
+    GRPC, METHODS, MQTT, SOCKET_IO, WEBSOCKET,
 };
 use crate::grpc;
+use crate::script;
 use crate::snippets;
 use crate::store::Store;
 use crate::theme::{Tokens, MONO};
@@ -17,6 +18,7 @@ use gpui_kit::component::resizable::{resizable_panel, v_resizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Section {
@@ -25,6 +27,10 @@ enum Section {
     Headers,
     Body,
     Settings,
+    /// Socket.IO: events to listen to.
+    Events,
+    /// HTTP: pre-request and post-response scripts.
+    Scripts,
     /// gRPC: server reflection or a .proto file.
     Definition,
     Docs,
@@ -35,18 +41,45 @@ enum ResponseTab {
     Body,
     Cookies,
     Headers,
+    Tests,
+    Console,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StreamView {
+    Events,
+    /// The answer an AI API streamed, joined.
+    Assembled,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ScriptView {
+    PreRequest,
+    PostResponse,
+}
+
+/// Script results shown next to the response.
+#[derive(Default)]
+struct ScriptReport {
+    tests: Vec<script::TestResult>,
+    logs: Vec<script::LogLine>,
+    errors: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum BodyView {
     Pretty,
     Raw,
+    /// Rendered HTML, or the image itself.
+    Preview,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Menu {
     Method,
     Auth,
+    /// The nth of `Auth::choices_mut`.
+    AuthChoice(usize),
     Language,
     GrpcMethod,
     CodeLanguage,
@@ -95,17 +128,28 @@ fn pretty_message(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-/// Label for the request-kind box and header badge.
-pub fn method_label(method: &str) -> &str {
-    match method {
-        SOCKET_IO => "Socket.IO",
-        GRPC => "gRPC",
-        m => m,
+pub use crate::model::method_label;
+
+fn choice_label(value: &str) -> &str {
+    match value {
+        "authorization_code" => "Authorization Code",
+        "authorization_code_pkce" => "Authorization Code (With PKCE)",
+        "client_credentials" => "Client Credentials",
+        "password" => "Password Credentials",
+        "basic" => "Send as Basic Auth header",
+        "body" => "Send in request body",
+        "header" => "Header",
+        "query" => "Query Params",
+        "text" => "Plain text",
+        "base64" => "Base64 encoded",
+        "sha256" => "SHA-256",
+        "sha1" => "SHA-1",
+        other => other,
     }
 }
 
 /// Numeric socket settings edited as text, with how each one is stored.
-const SOCKET_FIELDS: [(&str, &str, fn(&mut Request, &str) -> bool, fn(&Request) -> String); 5] = [
+const SOCKET_FIELDS: [(&str, &str, fn(&mut Request, &str) -> bool, fn(&Request) -> String); 9] = [
     (
         "Handshake request timeout",
         "How long to wait for the connection to be established, in ms. 0 waits forever.",
@@ -139,13 +183,53 @@ const SOCKET_FIELDS: [(&str, &str, fn(&mut Request, &str) -> bool, fn(&Request) 
         },
         |r| r.socket.handshake_path.clone(),
     ),
+    (
+        "Client ID",
+        "Identifies this client to the broker. Leave empty to generate one per connection.",
+        |r, v| {
+            r.socket.client_id = v.into();
+            true
+        },
+        |r| r.socket.client_id.clone(),
+    ),
+    (
+        "Subscribe to",
+        "Topic filters to subscribe to on connect, comma-separated. + and # are wildcards.",
+        |r, v| {
+            r.socket.subscribe = v.into();
+            true
+        },
+        |r| r.socket.subscribe.clone(),
+    ),
+    (
+        "QoS",
+        "Quality of service for subscriptions and published messages: 0, 1 or 2.",
+        |r, v| v.parse().ok().filter(|q| *q <= 2).map(|q| r.socket.qos = q).is_some(),
+        |r| r.socket.qos.to_string(),
+    ),
+    (
+        "Keep alive",
+        "Seconds between pings so the broker knows the client is alive. 0 turns it off.",
+        |r, v| v.parse().map(|v| r.socket.keep_alive_s = v).is_ok(),
+        |r| r.socket.keep_alive_s.to_string(),
+    ),
 ];
+
+/// Which SOCKET_FIELDS rows apply to `request`: the first four are shared, then Socket.IO's, then MQTT's.
+fn socket_field_applies(ix: usize, request: &Request) -> bool {
+    match ix {
+        0..=3 => true,
+        4 => request.is_socket_io(),
+        _ => request.is_mqtt(),
+    }
+}
 
 pub enum RequestEvent {
     /// Title, method, or dirty state changed.
     Changed,
     /// Save was requested for a request that is not in a collection yet.
     SaveAs,
+    ManageCookies,
 }
 
 pub struct RequestEditor {
@@ -164,7 +248,13 @@ pub struct RequestEditor {
     graphql_query: Entity<EditorState>,
     graphql_variables: Entity<EditorState>,
     socket_event: Entity<InputState>,
+    socket_events: Entity<KvEditor>,
     socket_fields: Vec<Entity<InputState>>,
+    pre_script: Entity<EditorState>,
+    post_script: Entity<EditorState>,
+    script_view: ScriptView,
+    report: Option<Rc<ScriptReport>>,
+    log_filter: Entity<InputState>,
     /// One input per `Auth::fields_mut` slot, reused across auth types.
     auth_inputs: Vec<Entity<InputState>>,
     oauth_status: Option<String>,
@@ -174,6 +264,15 @@ pub struct RequestEditor {
     generation: u64,
     response_tab: ResponseTab,
     body_view: BodyView,
+    /// Decoded once per response, so each frame doesn't decode the image again.
+    preview_image: Option<Arc<Image>>,
+    /// Server-sent events of the response still arriving.
+    stream: Vec<http::SseEvent>,
+    stream_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// `None` picks Assembled for AI streams, else Events.
+    stream_view: Option<StreamView>,
+    stream_open: std::collections::HashSet<usize>,
+    stream_scroll: ScrollHandle,
     viewer: Option<Entity<EditorState>>,
     pub show_code: bool,
     code: Option<Entity<EditorState>>,
@@ -225,12 +324,16 @@ impl RequestEditor {
         let form = cx.new(|cx| KvEditor::new(&[], ("Key", "Value"), window, cx));
         let multipart = cx.new(|cx| KvEditor::new(&[], ("Key", "Value"), window, cx).with_files());
         let socket_event = cx.new(|cx| InputState::new(window, cx).placeholder("Event name"));
+        let socket_events = cx.new(|cx| KvEditor::new(&[], ("Event", "Description"), window, cx));
+        let log_filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter messages"));
         let socket_fields: Vec<_> = SOCKET_FIELDS.iter().map(|_| cx.new(|cx| InputState::new(window, cx))).collect();
         let auth_inputs: Vec<_> = (0..8).map(|_| cx.new(|cx| InputState::new(window, cx))).collect();
         let docs = code_editor(&request.description, "text", window, cx);
         let body = code_editor("", request.raw_language.editor_language(), window, cx);
         let graphql_query = code_editor("", "text", window, cx);
         let graphql_variables = code_editor("", "json", window, cx);
+        let pre_script = code_editor("", "javascript", window, cx);
+        let post_script = code_editor("", "javascript", window, cx);
         let mut subs = vec![
             cx.subscribe_in(&url, window, Self::on_url),
             cx.subscribe_in(&params, window, |this, _, _: &KvChanged, window, cx| {
@@ -251,6 +354,15 @@ impl RequestEditor {
             cx.subscribe_in(&multipart, window, |this, _, _: &KvChanged, window, cx| {
                 this.request.body_multipart = this.multipart.read(cx).values(cx);
                 this.changed(window, cx);
+            }),
+            cx.subscribe_in(&socket_events, window, |this, _, _: &KvChanged, window, cx| {
+                this.request.socket_events = this.socket_events.read(cx).values(cx);
+                this.changed(window, cx);
+            }),
+            cx.subscribe_in(&log_filter, window, |_, _, e: &InputEvent, _, cx| {
+                if matches!(e, InputEvent::Change) {
+                    cx.notify();
+                }
             }),
             cx.subscribe_in(&socket_event, window, |this, input, e: &InputEvent, window, cx| {
                 if matches!(e, InputEvent::Change) {
@@ -297,7 +409,13 @@ impl RequestEditor {
             graphql_query,
             graphql_variables,
             socket_event,
+            socket_events,
             socket_fields,
+            pre_script,
+            post_script,
+            script_view: ScriptView::PostResponse,
+            report: None,
+            log_filter,
             auth_inputs,
             oauth_status: None,
             docs,
@@ -306,6 +424,12 @@ impl RequestEditor {
             generation: 0,
             response_tab: ResponseTab::Body,
             body_view: BodyView::Pretty,
+            preview_image: None,
+            stream: Vec::new(),
+            stream_stop: None,
+            stream_view: None,
+            stream_open: Default::default(),
+            stream_scroll: ScrollHandle::new(),
             viewer: None,
             show_code: false,
             code: None,
@@ -336,6 +460,7 @@ impl RequestEditor {
         self.multipart.update(cx, |e, cx| e.set_values(&request.body_multipart, window, cx));
         let event = request.socket_event.clone();
         self.socket_event.update(cx, |s, cx| s.set_value(event, window, cx));
+        self.socket_events.update(cx, |e, cx| e.set_values(&request.socket_events, window, cx));
         for (input, field) in self.socket_fields.iter().zip(SOCKET_FIELDS) {
             let value = (field.3)(&request);
             input.update(cx, |s, cx| s.set_value(value, window, cx));
@@ -344,6 +469,40 @@ impl RequestEditor {
         self.write_auth(window, cx);
         self.rebuild_body(window, cx);
         self.rebuild_graphql(window, cx);
+        self.rebuild_scripts(window, cx);
+    }
+
+    fn rebuild_scripts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pre_script = code_editor(&self.request.scripts.pre_request, "javascript", window, cx);
+        self.post_script = code_editor(&self.request.scripts.test, "javascript", window, cx);
+        let subs = [
+            cx.subscribe_in(&self.pre_script, window, |this, e, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.request.scripts.pre_request = e.read(cx).value().to_string();
+                    this.changed(window, cx);
+                }
+            }),
+            cx.subscribe_in(&self.post_script, window, |this, e, ev: &InputEvent, window, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.request.scripts.test = e.read(cx).value().to_string();
+                    this.changed(window, cx);
+                }
+            }),
+        ];
+        self._subscriptions.extend(subs);
+    }
+
+    /// Appends a snippet to the open script editor.
+    fn insert_snippet(&mut self, code: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let (editor, current) = match self.script_view {
+            ScriptView::PreRequest => (self.pre_script.clone(), &mut self.request.scripts.pre_request),
+            ScriptView::PostResponse => (self.post_script.clone(), &mut self.request.scripts.test),
+        };
+        let separator = if current.trim().is_empty() { "" } else if current.ends_with('\n') { "\n" } else { "\n\n" };
+        let text = format!("{}{separator}{code}\n", current.trim_end_matches(|c| c == ' '));
+        *current = text.clone();
+        editor.update(cx, |s, cx| s.set_value(text, window, cx));
+        self.changed(window, cx);
     }
 
     fn rebuild_graphql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -422,12 +581,27 @@ impl RequestEditor {
         let Auth::OAuth2(o) = self.request.auth.clone() else { return };
         let ws = &self.store.read(cx).ws;
         let (vars, settings) = (ws.variables(self.saved_id), ws.settings.clone());
-        self.oauth_status = Some("Requesting token…".into());
-        cx.notify();
         let (tx, rx) = oneshot::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(http::fetch_oauth2_token(&o, &vars, &settings));
-        });
+        if o.grant_type.starts_with("authorization_code") {
+            let flow = match crate::auth::start_code_flow(&o, &vars) {
+                Ok(flow) => flow,
+                Err(e) => {
+                    self.oauth_status = Some(e);
+                    return cx.notify();
+                }
+            };
+            cx.open_url(&flow.url);
+            self.oauth_status = Some("Sign in in your browser…".into());
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::auth::finish_code_flow(flow, &o, &vars, &settings));
+            });
+        } else {
+            self.oauth_status = Some("Requesting token…".into());
+            std::thread::spawn(move || {
+                let _ = tx.send(http::fetch_oauth2_token(&o, &vars, &settings));
+            });
+        }
+        cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let Ok(result) = rx.await else { return };
             let _ = this.update_in(cx, |this, window, cx| {
@@ -578,24 +752,72 @@ impl RequestEditor {
             return;
         }
         let request = self.request.clone();
-        let vars = self.store.read(cx).ws.variables(self.saved_id);
-        let settings = self.store.read(cx).ws.settings.clone();
+        let ws = &self.store.read(cx).ws;
+        let chain = self.saved_id.map(|id| ws.script_chain(id)).unwrap_or_default();
+        let scopes = ws.scopes(self.saved_id);
+        let settings = ws.settings.clone();
+        let jar = crate::http::CookieJar::new(ws.cookies.clone());
+        let saved_id = self.saved_id;
         self.generation += 1;
         let generation = self.generation;
         self.state = SendState::Sending;
         self.menu = None;
+        self.stream.clear();
+        self.stream_open.clear();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.stream_stop = Some(stop.clone());
         cx.notify();
         let (tx, rx) = oneshot::channel();
+        let (event_tx, mut event_rx) = futures::channel::mpsc::unbounded();
         let job = request.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(http::execute(&job, &vars, &settings));
+            let mut on_event = |e: &http::SseEvent| {
+                let _ = event_tx.unbounded_send(e.clone());
+                !stop.load(std::sync::atomic::Ordering::Relaxed)
+            };
+            let sent = script::send(&job, &chain, scopes, &settings, script::Iteration::default(), &jar, &mut on_event);
+            let _ = tx.send((sent, jar.cookies()));
         });
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = event_rx.next().await {
+                let current = this.update(cx, |this, cx| {
+                    if this.generation != generation {
+                        return false;
+                    }
+                    this.stream.push(event);
+                    this.stream_scroll.scroll_to_bottom();
+                    cx.notify();
+                    true
+                });
+                if !matches!(current, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(result) = rx.await else { return };
+            let Ok((sent, cookies)) = rx.await else { return };
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.generation != generation {
                     return;
                 }
+                let writes: Vec<_> = sent.writes().filter(|w| w.scope != crate::model::Scope::Local).cloned().collect();
+                this.store.update(cx, |s, cx| {
+                    if !writes.is_empty() || s.ws.cookies != cookies {
+                        s.update(cx, |ws| {
+                            ws.apply_writes(saved_id, &writes);
+                            ws.cookies = cookies;
+                        });
+                    }
+                });
+                let report = ScriptReport {
+                    tests: sent.tests().cloned().collect(),
+                    logs: sent.pre.logs.iter().chain(&sent.post.logs).cloned().collect(),
+                    errors: sent.pre.errors.iter().chain(&sent.post.errors).cloned().collect(),
+                };
+                let has_report = !(report.tests.is_empty() && report.logs.is_empty() && report.errors.is_empty());
+                this.report = has_report.then(|| Rc::new(report));
+                let result = sent.response.unwrap_or_else(|| Err("Skipped by a pre-request script (skipRequest)".into()));
                 let entry = HistoryEntry {
                     request: Request {
                         name: String::new(),
@@ -606,6 +828,8 @@ impl RequestEditor {
                 };
                 this.store
                     .update(cx, |s, cx| s.update(cx, |ws| ws.push_history(entry)));
+                this.stream.clear();
+                this.stream_stop = None;
                 match result {
                     Ok(response) => {
                         this.state = SendState::Done(Rc::new(response));
@@ -679,6 +903,8 @@ impl RequestEditor {
                     .join("\n");
                 self.log(WsKind::Info, format!("Connected to {url}"), detail, None);
             }
+            ws::Event::Received { event: Some(name), .. }
+                if self.request.is_socket_io() && !name.starts_with("ack ") && !self.request.listens_to(&name) => {}
             ws::Event::Received { text, binary, event } => {
                 let tag = event.or(binary.then(|| "Binary".to_string()));
                 self.log(WsKind::Received, text.clone(), pretty_message(&text), tag)
@@ -729,7 +955,22 @@ impl RequestEditor {
         };
         let vars = self.store.read(cx).ws.variables(self.saved_id);
         let text = resolve(&self.request.body_raw, &vars);
-        let (command, tag) = if self.request.is_socket_io() {
+        let (command, tag) = if self.request.is_mqtt() {
+            let topic = resolve(self.request.socket_event.trim(), &vars);
+            if topic.is_empty() {
+                return self.log(WsKind::Error, "Enter a topic to publish to".into(), String::new(), None);
+            }
+            let payload = match self.request.message_binary {
+                Some(encoding) => match encoding.decode(&text) {
+                    Ok(bytes) => bytes,
+                    Err(error) => return self.log(WsKind::Error, error, String::new(), None),
+                },
+                None => text.clone().into_bytes(),
+            };
+            let (qos, retain) = (self.request.socket.qos, self.request.socket.retain);
+            let tag = if retain { format!("{topic} (retained)") } else { topic.clone() };
+            (ws::Command::Publish { topic, payload, qos, retain }, Some(tag))
+        } else if self.request.is_socket_io() {
             let event = resolve(self.request.socket_event.trim(), &vars);
             if event.is_empty() {
                 return self.log(WsKind::Error, "Enter an event name to emit".into(), String::new(), None);
@@ -956,18 +1197,170 @@ impl RequestEditor {
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        // ponytail: the worker thread finishes in the background; its result is dropped.
-        self.generation += 1;
-        self.state = SendState::Idle;
+        if let Some(stop) = self.stream_stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        // A stream that already sent events stops at the next one and keeps what arrived.
+        if self.stream.is_empty() {
+            // ponytail: the worker thread finishes in the background; its result is dropped.
+            self.generation += 1;
+            self.state = SendState::Idle;
+        }
         cx.notify();
+    }
+
+    fn render_stream(&self, events: &[http::SseEvent], live: bool, raw: Option<String>, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
+        let assembled = http::assemble(events);
+        let view = match (self.stream_view, &assembled) {
+            (Some(StreamView::Assembled), None) | (None, None) => StreamView::Events,
+            (Some(view), _) => view,
+            (None, Some(_)) => StreamView::Assembled,
+        };
+        let seg = |id: &'static str, label: String, value: StreamView, cx: &mut Context<Self>| {
+            let on = view == value;
+            div()
+                .id(id)
+                .h(px(24.))
+                .px_2()
+                .flex()
+                .items_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(rgb(t.hover)).text_color(rgb(t.text)))
+                .when(!on, |d| d.text_color(rgb(t.text_secondary)))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.stream_view = Some(value);
+                    cx.notify();
+                }))
+        };
+        let first = events.first().map(|e| format!("first event after {} ms", e.at_ms));
+        let mut stats = vec![format!("{} event{}", events.len(), if events.len() == 1 { "" } else { "s" })];
+        stats.extend(first);
+        if let Some(a) = &assembled {
+            stats.push(format!("{} format", a.format));
+            match (a.input_tokens, a.output_tokens) {
+                (Some(i), Some(o)) => stats.push(format!("{i} in / {o} out tokens")),
+                (None, Some(o)) => stats.push(format!("{o} out tokens")),
+                _ => {}
+            }
+            stats.extend(a.finish_reason.clone().map(|r| format!("finished: {r}")));
+        }
+        let copy = match (view, &assembled) {
+            (StreamView::Assembled, Some(a)) => a.text.clone(),
+            _ => raw.unwrap_or_else(|| events.iter().map(|e| e.data.as_str()).collect::<Vec<_>>().join("\n")),
+        };
+        let bar = div()
+            .px_4()
+            .pb_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .p(px(2.))
+                    .flex()
+                    .rounded(px(4.))
+                    .bg(rgb(t.bg_secondary))
+                    .when(assembled.is_some(), |d| d.child(seg("stream-assembled", "Assembled".into(), StreamView::Assembled, cx)))
+                    .child(seg("stream-events", "Events".into(), StreamView::Events, cx)),
+            )
+            .child(div().flex_1().min_w_0().truncate().text_color(rgb(t.text_secondary)).child(stats.join(" · ")))
+            .when(live, |d| d.child(div().text_color(rgb(t.warning)).child("Streaming…")))
+            .child(icon_button("copy-stream", "icons/copy.svg", t).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))));
+        let body: AnyElement = match (view, assembled) {
+            (StreamView::Assembled, Some(a)) => div()
+                .id("stream-assembled-body")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.stream_scroll)
+                .mx_4()
+                .mb_2()
+                .p_3()
+                .rounded(px(4.))
+                .border_1()
+                .border_color(rgb(t.border))
+                .when(!a.thinking.is_empty(), |d| {
+                    d.child(div().pb_1().font_weight(FontWeight::SEMIBOLD).text_color(rgb(t.text_tertiary)).child("Thinking"))
+                        .child(div().pb_3().text_color(rgb(t.text_tertiary)).child(a.thinking.clone()))
+                })
+                .child(gpui_kit::component::text::TextView::markdown("stream-markdown", a.text).selectable(true))
+                .into_any_element(),
+            _ => div()
+                .id("stream-events")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.stream_scroll)
+                .children(events.iter().enumerate().map(|(ix, e)| {
+                    let open = self.stream_open.contains(&ix);
+                    div()
+                        .border_b_1()
+                        .border_color(rgb(t.border))
+                        .child(
+                            div()
+                                .id(("sse-row", ix))
+                                .h(px(28.))
+                                .px_4()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .cursor_pointer()
+                                .hover(|d| d.bg(rgb(t.hover)))
+                                .child(div().w(px(72.)).flex_none().text_color(rgb(t.text_tertiary)).child(format!("+{} ms", e.at_ms)))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded(px(2.))
+                                        .bg(rgb(t.bg_secondary))
+                                        .text_color(rgb(if e.event == "error" { t.error } else { t.text_secondary }))
+                                        .child(e.event.clone()),
+                                )
+                                .child(div().flex_1().min_w_0().truncate().font_family(MONO).child(e.data.replace('\n', " ")))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.stream_open.remove(&ix) {
+                                        this.stream_open.insert(ix);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .when(open, |d| {
+                            d.child(
+                                div()
+                                    .px_4()
+                                    .pb_2()
+                                    .font_family(MONO)
+                                    .text_color(rgb(t.text_secondary))
+                                    .child(pretty_message(&e.data))
+                                    .when_some(e.id.clone(), |d, id| d.child(div().pt_1().text_color(rgb(t.text_tertiary)).child(format!("id: {id}")))),
+                            )
+                        })
+                }))
+                .into_any_element(),
+        };
+        div().flex_1().min_h_0().flex().flex_col().child(bar).child(body).into_any_element()
     }
 
     fn refresh_viewer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let SendState::Done(response) = &self.state else {
             return;
         };
+        self.preview_image = response.image_type().map(|kind| {
+            let format = match kind {
+                "png" => ImageFormat::Png,
+                "jpeg" => ImageFormat::Jpeg,
+                "gif" => ImageFormat::Gif,
+                "webp" => ImageFormat::Webp,
+                "svg" => ImageFormat::Svg,
+                "bmp" => ImageFormat::Bmp,
+                _ => ImageFormat::Tiff,
+            };
+            Arc::new(Image::from_bytes(format, response.body.clone()))
+        });
         let (text, language) = match self.body_view {
-            BodyView::Pretty => (response.pretty(), response.language()),
+            BodyView::Pretty | BodyView::Preview => (response.pretty(), response.language()),
             BodyView::Raw => (response.text(), "text"),
         };
         self.viewer = Some(code_editor(&text, language, window, cx));
@@ -991,7 +1384,7 @@ impl RequestEditor {
     }
 
     fn set_method(&mut self, method: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(method, WEBSOCKET | SOCKET_IO | GRPC) && self.request.method != method {
+        if matches!(method, WEBSOCKET | SOCKET_IO | MQTT | GRPC) && self.request.method != method {
             self.section = Section::Body;
         }
         self.request.method = method.into();
@@ -1014,7 +1407,7 @@ impl RequestEditor {
                 .on_click(cx.listener(move |this, _, window, cx| this.set_method(m, window, cx)))
         }))
         .child(div().h(px(1.)).my_1().bg(rgb(t.border)))
-        .children([(WEBSOCKET, "WebSocket"), (SOCKET_IO, "Socket.IO"), (GRPC, "gRPC")].map(|(kind, label)| {
+        .children([(WEBSOCKET, "WebSocket"), (SOCKET_IO, "Socket.IO"), (MQTT, "MQTT"), (GRPC, "gRPC")].map(|(kind, label)| {
             menu_item(SharedString::from(format!("method-{kind}")), t)
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(label)
@@ -1299,6 +1692,8 @@ impl RequestEditor {
                 }))
         };
         let ws = r.is_socket();
+        let mqtt = r.is_mqtt();
+        let socket_io = r.is_socket_io();
         if r.is_grpc() {
             let tabs = div()
                 .px_4()
@@ -1330,16 +1725,24 @@ impl RequestEditor {
             .flex()
             .gap_4()
             .when(ws, |d| d.child(tab("sec-message", Section::Body, "Message".into(), false, cx)))
-            .child(tab("sec-params", Section::Params, "Params".into(), r.params.iter().any(|p| p.enabled), cx))
-            .when(!ws, |d| d.child(tab("sec-auth", Section::Auth, "Authorization".into(), r.auth != Auth::None, cx)))
-            .child(tab(
-                "sec-headers",
-                Section::Headers,
-                if header_count > 0 { format!("Headers ({header_count})") } else { "Headers".into() },
-                false,
-                cx,
-            ))
+            .when(socket_io, |d| {
+                let listening = r.socket_events.iter().filter(|e| e.enabled && !e.key.trim().is_empty()).count();
+                let label = if listening > 0 { format!("Events ({listening})") } else { "Events".into() };
+                d.child(tab("sec-events", Section::Events, label, false, cx))
+            })
+            .when(!mqtt, |d| d.child(tab("sec-params", Section::Params, "Params".into(), r.params.iter().any(|p| p.enabled), cx)))
+            .when(!ws || mqtt, |d| d.child(tab("sec-auth", Section::Auth, "Authorization".into(), r.auth != Auth::None, cx)))
+            .when(!mqtt, |d| {
+                d.child(tab(
+                    "sec-headers",
+                    Section::Headers,
+                    if header_count > 0 { format!("Headers ({header_count})") } else { "Headers".into() },
+                    false,
+                    cx,
+                ))
+            })
             .when(!ws, |d| d.child(tab("sec-body", Section::Body, "Body".into(), r.body_mode != BodyMode::None, cx)))
+            .when(!ws, |d| d.child(tab("sec-scripts", Section::Scripts, "Scripts".into(), !r.scripts.is_empty(), cx)))
             .child(tab("sec-settings", Section::Settings, "Settings".into(), false, cx))
             .child(tab("sec-docs", Section::Docs, "Docs".into(), !r.description.trim().is_empty(), cx));
         let title = |text: &'static str| {
@@ -1352,11 +1755,25 @@ impl RequestEditor {
                 .child(text)
         };
         let section = match self.section {
-            Section::Auth if ws => Section::Body,
+            Section::Auth if ws && !mqtt => Section::Body,
+            Section::Params | Section::Headers if mqtt => Section::Body,
             Section::Definition => Section::Params,
+            Section::Events if !socket_io => Section::Body,
+            Section::Scripts if ws => Section::Body,
             section => section,
         };
         let content = match section {
+            Section::Scripts => self.render_scripts(t, cx),
+            Section::Events => div()
+                .child(title("Events"))
+                .child(div().pb_2().text_color(rgb(t.text_secondary)).child(
+                    if r.socket_events.iter().any(|e| !e.key.trim().is_empty()) {
+                        "Only checked events appear in the response. Uncheck an event to mute it, even while connected."
+                    } else {
+                        "Listening to every event. Add event names to show only those."
+                    },
+                ))
+                .child(self.socket_events.clone()),
             Section::Params => div().child(title("Query Params")).child(self.params.clone()),
             Section::Headers => div().child(title("Headers")).child(self.headers.clone()),
             Section::Auth => self.render_auth(t, cx),
@@ -1408,6 +1825,10 @@ impl RequestEditor {
             Auth::Digest { .. } => "The request is retried with a digest of the credentials after the server's challenge.",
             Auth::OAuth2(_) => "The access token is sent in the Authorization header. Get a new one from the token URL.",
             Auth::AwsV4 { .. } => "The request is signed with AWS Signature Version 4 when you send it.",
+            Auth::Jwt(_) => "A JWT is signed from the payload when you send the request. RS, PS and ES keys are PEM, pasted or as a file path.",
+            Auth::OAuth1(_) => "The request is signed with OAuth 1.0 when you send it; the timestamp and nonce are generated.",
+            Auth::Hawk(_) => "The request is signed with a Hawk header when you send it.",
+            Auth::Ntlm(_) => "Floki answers the server's NTLM challenge (NTLMv2). Use DOMAIN\\user or the Domain field.",
         };
         let field = |label: &'static str, input: &Entity<InputState>| {
             div()
@@ -1428,42 +1849,59 @@ impl RequestEditor {
                         .child(Input::new(input).appearance(false).text_size(px(12.))),
                 )
         };
-        let option = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
-            div()
-                .flex()
-                .items_center()
-                .gap_4()
-                .child(div().w(px(120.)).text_color(rgb(t.text_secondary)).child(label))
-                .child(
-                    ghost_button(id, t)
-                        .border_1()
-                        .border_color(rgb(t.border))
-                        .text_color(rgb(t.text))
-                        .child(value)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            match &mut this.request.auth {
-                                Auth::ApiKey { in_query, .. } => *in_query = !*in_query,
-                                Auth::OAuth2(o) => {
-                                    o.grant_type =
-                                        if o.grant_type == "password" { "client_credentials" } else { "password" }.into()
-                                }
-                                _ => {}
+        let row = |label: &'static str| {
+            div().flex().items_center().gap_4().child(div().w(px(120.)).flex_none().text_color(rgb(t.text_secondary)).child(label))
+        };
+        let picker = |id: ElementId, value: &str| {
+            ghost_button(id, t).relative().border_1().border_color(rgb(t.border)).text_color(rgb(t.text)).child(choice_label(value).to_string())
+        };
+        let choices: Vec<_> = auth
+            .clone()
+            .choices_mut()
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (label, value, options))| {
+                let list = menu(t).children(options.iter().map(|option| {
+                    let option = *option;
+                    menu_item(SharedString::from(format!("auth-choice-{ix}-{option}")), t).child(choice_label(option)).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            if let Some((_, value, _)) = this.request.auth.choices_mut().into_iter().nth(ix) {
+                                *value = option.into();
                             }
+                            this.menu = None;
                             this.write_auth(window, cx);
                             this.changed(window, cx);
-                        })),
+                        },
+                    ))
+                }));
+                row(label).child(
+                    picker(("auth-choice", ix).into(), value)
+                        .child(icon("icons/chevron-down.svg", 12., t.text_secondary))
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_menu(Menu::AuthChoice(ix), cx)))
+                        .when(self.menu == Some(Menu::AuthChoice(ix)), |d| d.child(popover(list))),
                 )
-        };
-        let mut fields = div().flex().flex_col().gap_2().children(
-            auth.fields().iter().zip(&self.auth_inputs).map(|((label, _), input)| field(label, input)),
-        );
+            })
+            .collect();
+        let mut fields = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(choices)
+            .children(auth.fields().iter().zip(&self.auth_inputs).map(|((label, _), input)| field(label, input)));
         match auth {
             Auth::ApiKey { in_query, .. } => {
-                fields = fields.child(option("api-key-in", "Add to", if *in_query { "Query Params" } else { "Header" }, cx))
+                fields = fields.child(row("Add to").child(picker("api-key-in".into(), if *in_query { "query" } else { "header" }).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        if let Auth::ApiKey { in_query, .. } = &mut this.request.auth {
+                            *in_query = !*in_query;
+                        }
+                        this.write_auth(window, cx);
+                        this.changed(window, cx);
+                    }),
+                )))
             }
-            Auth::OAuth2(o) => {
-                let grant = if o.grant_type == "password" { "Password Credentials" } else { "Client Credentials" };
-                fields = fields.child(option("oauth-grant", "Grant Type", grant, cx)).child(
+            Auth::OAuth2(_) => {
+                fields = fields.child(
                     div()
                         .flex()
                         .items_center()
@@ -1564,7 +2002,7 @@ impl RequestEditor {
                         this.changed(window, cx);
                     }))
             }))
-            .when(self.request.is_websocket(), |d| {
+            .when(self.request.is_websocket() || self.request.is_mqtt(), |d| {
                 d.children([(BinaryEncoding::Base64, "Binary (Base64)"), (BinaryEncoding::Hex, "Binary (Hex)")].map(
                     |(encoding, label)| {
                         menu_item(SharedString::from(format!("lang-{label}")), t).child(label).on_click(cx.listener(
@@ -1579,7 +2017,7 @@ impl RequestEditor {
                     },
                 ))
             });
-        let binary = self.request.message_binary.filter(|_| self.request.is_websocket());
+        let binary = self.request.message_binary.filter(|_| self.request.is_websocket() || self.request.is_mqtt());
         let lang_label = match binary {
             Some(BinaryEncoding::Base64) => "Binary (Base64)",
             Some(BinaryEncoding::Hex) => "Binary (Hex)",
@@ -1698,7 +2136,8 @@ impl RequestEditor {
                 .child(Editor::new(&self.body).appearance(false).h_full()),
         };
         let noun = if ws { "Message" } else { "Body" };
-        let socket_io = self.request.is_socket_io().then(|| {
+        let mqtt = self.request.is_mqtt();
+        let socket_io = (self.request.is_socket_io() || mqtt).then(|| {
             div()
                 .pb_2()
                 .flex()
@@ -1714,6 +2153,7 @@ impl RequestEditor {
                         .rounded(px(4.))
                         .border_1()
                         .border_color(rgb(t.border))
+                        .when(mqtt, |d| d.child(div().pr_2().text_color(rgb(t.text_tertiary)).child("Topic")))
                         .child(Input::new(&self.socket_event).appearance(false).text_size(px(12.))),
                 )
                 .child(
@@ -1721,13 +2161,18 @@ impl RequestEditor {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(checkbox("socket-ack", self.request.socket_ack, t).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                this.request.socket_ack = !this.request.socket_ack;
-                                this.changed(window, cx);
-                            },
-                        )))
-                        .child("Ack"),
+                        .child(
+                            checkbox("socket-ack", if mqtt { self.request.socket.retain } else { self.request.socket_ack }, t)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.request.is_mqtt() {
+                                        this.request.socket.retain = !this.request.socket.retain;
+                                    } else {
+                                        this.request.socket_ack = !this.request.socket_ack;
+                                    }
+                                    this.changed(window, cx);
+                                })),
+                        )
+                        .child(if mqtt { "Retain" } else { "Ack" }),
                 )
         });
         let json_warning = (mode == BodyMode::Raw
@@ -1745,6 +2190,102 @@ impl RequestEditor {
             .children(json_warning.map(|w| div().pb_2().text_color(rgb(t.warning)).child(w)))
             .child(content);
         div().child(bar).child(content)
+    }
+
+    fn render_scripts(&self, t: &Tokens, cx: &mut Context<Self>) -> Div {
+        let view = self.script_view;
+        let seg = |id: &'static str, label: &'static str, value: ScriptView, filled: bool, cx: &mut Context<Self>| {
+            let on = view == value;
+            div()
+                .id(id)
+                .h(px(28.))
+                .px_3()
+                .flex()
+                .items_center()
+                .gap_1()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(rgb(t.bg_tertiary)))
+                .text_color(rgb(if on { t.text } else { t.text_secondary }))
+                .child(label)
+                .when(filled, |d| d.child(dot(t.success)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.script_view = value;
+                    cx.notify();
+                }))
+        };
+        let (editor, help, snippets): (_, _, &[(&str, &str)]) = match view {
+            ScriptView::PreRequest => (
+                &self.pre_script,
+                "Runs before the request is sent. Change req.url, req.headers or req.body, or set variables the request uses.",
+                &[
+                    ("Set a variable", "vars.set(\"requestId\", String(Date.now()));"),
+                    ("Add a header", "req.headers.set(\"X-Request-Time\", new Date().toISOString());"),
+                    ("Set an environment variable", "env.set(\"name\", \"value\");"),
+                    ("Log a value", "console.log(req.url);"),
+                ],
+            ),
+            ScriptView::PostResponse => (
+                &self.post_script,
+                "Runs after the response arrives. Write tests with test() and expect(), and save values for later requests.",
+                &[
+                    ("Status is 200", "test(\"Status is 200\", () => {\n  expect(res.status).toBe(200);\n});"),
+                    ("Response is fast", "test(\"Response time is below 500 ms\", () => {\n  expect(res.time).toBeLessThan(500);\n});"),
+                    ("JSON field equals", "test(\"Body has the expected value\", () => {\n  expect(res.json().id).toBe(1);\n});"),
+                    ("Header is present", "test(\"Content-Type is set\", () => {\n  expect(res.headers.has(\"Content-Type\")).toBe(true);\n});"),
+                    ("Save a field to the environment", "env.set(\"token\", res.json().token);"),
+                ],
+            ),
+        };
+        let snippet_list = div().w(px(220.)).flex_none().flex().flex_col().gap_1().child(
+            div().pb_1().text_color(rgb(t.text_tertiary)).child("Snippets"),
+        );
+        let snippet_list = snippets.iter().enumerate().fold(snippet_list, |list, (ix, (label, code))| {
+            let code = *code;
+            list.child(
+                div()
+                    .id(("snippet", ix))
+                    .cursor_pointer()
+                    .text_color(rgb(t.link))
+                    .hover(|d| d.underline())
+                    .child(*label)
+                    .on_click(cx.listener(move |this, _, window, cx| this.insert_snippet(code, window, cx))),
+            )
+        });
+        div()
+            .pt_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(seg("script-pre", "Pre-request", ScriptView::PreRequest, !self.request.scripts.pre_request.trim().is_empty(), cx))
+                    .child(seg("script-post", "Post-response", ScriptView::PostResponse, !self.request.scripts.test.trim().is_empty(), cx)),
+            )
+            .child(div().text_color(rgb(t.text_secondary)).child(help))
+            .child(
+                div()
+                    .flex()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(280.))
+                            .border_1()
+                            .border_color(rgb(t.border))
+                            .rounded(px(4.))
+                            .font_family(MONO)
+                            .child(Editor::new(editor).appearance(false).h_full()),
+                    )
+                    .child(snippet_list),
+            )
+            .child(div().text_color(rgb(t.text_tertiary)).child(
+                "Available: test, expect, res, req, env, globals, collection, vars, data, info, console. Postman's pm.* scripts also run.",
+            ))
     }
 
     fn render_settings(&self, t: &Tokens, cx: &mut Context<Self>) -> Div {
@@ -1782,7 +2323,7 @@ impl RequestEditor {
             .when(self.request.is_socket(), |d| {
                 d.children(SOCKET_FIELDS.iter().zip(&self.socket_fields).enumerate().filter_map(
                     |(ix, ((title, help, ..), input))| {
-                        (ix < 4 || self.request.is_socket_io()).then(|| {
+                        socket_field_applies(ix, &self.request).then(|| {
                             div()
                                 .py_3()
                                 .flex()
@@ -1801,7 +2342,7 @@ impl RequestEditor {
                                 )
                                 .child(
                                     div()
-                                        .w(px(120.))
+                                        .w(px(if ix == 5 || ix == 6 { 240. } else { 120. }))
                                         .h(px(32.))
                                         .px_2()
                                         .flex()
@@ -1861,6 +2402,24 @@ impl RequestEditor {
                     )
                     .into_any_element()
             }
+            SendState::Sending if !self.stream.is_empty() => {
+                return div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(40.))
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_size(px(14.)).text_color(rgb(t.text_tertiary)).child("Response"))
+                            .child(outline_button("stream-stop", "Stop", t).on_click(cx.listener(|this, _, _, cx| this.cancel(cx)))),
+                    )
+                    .child(self.render_stream(&self.stream, true, None, t, cx))
+                    .into_any_element()
+            }
             SendState::Sending => {
                 return div()
                     .size_full()
@@ -1901,8 +2460,14 @@ impl RequestEditor {
             SendState::Done(response) => response.clone(),
         };
 
+        let report = self.report.clone();
+        let response_tab = match self.response_tab {
+            ResponseTab::Tests if !report.as_ref().is_some_and(|r| !r.tests.is_empty()) => ResponseTab::Body,
+            ResponseTab::Console if !report.as_ref().is_some_and(|r| !r.logs.is_empty() || !r.errors.is_empty()) => ResponseTab::Body,
+            tab => tab,
+        };
         let tab = |id: &'static str, label: String, value: ResponseTab, cx: &mut Context<Self>| {
-            section_tab(id, label, self.response_tab == value, t).on_click(cx.listener(move |this, _, _, cx| {
+            section_tab(id, label, response_tab == value, t).on_click(cx.listener(move |this, _, _, cx| {
                 this.response_tab = value;
                 cx.notify();
             }))
@@ -1922,6 +2487,13 @@ impl RequestEditor {
                 cx,
             ))
             .child(tab("res-headers", format!("Headers ({})", response.headers.len()), ResponseTab::Headers, cx))
+            .when_some(report.clone().filter(|r| !r.tests.is_empty()), |d, r| {
+                let passed = r.tests.iter().filter(|t| t.passed).count();
+                d.child(tab("res-tests", format!("Tests ({passed}/{})", r.tests.len()), ResponseTab::Tests, cx))
+            })
+            .when_some(report.clone().filter(|r| !r.logs.is_empty() || !r.errors.is_empty()), |d, r| {
+                d.child(tab("res-console", format!("Console ({})", r.logs.len() + r.errors.len()), ResponseTab::Console, cx))
+            })
             .child(div().flex_1())
             .child(
                 div()
@@ -1948,7 +2520,12 @@ impl RequestEditor {
                     .on_click(cx.listener(|this, _, _, cx| this.save_example(cx))),
             );
 
-        let body: AnyElement = match self.response_tab {
+        let body: AnyElement = match response_tab {
+            ResponseTab::Tests | ResponseTab::Console => {
+                let r = report.clone().unwrap_or_default();
+                self.render_report(&r, response_tab == ResponseTab::Tests, t)
+            }
+            ResponseTab::Body if !response.events.is_empty() => self.render_stream(&response.events, false, Some(response.text()), t, cx),
             ResponseTab::Body => {
                 let seg = |id: &'static str, label: &'static str, view: BodyView, cx: &mut Context<Self>| {
                     let on = self.body_view == view;
@@ -1969,7 +2546,18 @@ impl RequestEditor {
                             cx.notify();
                         }))
                 };
+                let previewable = response.is_html() || self.preview_image.is_some();
+                // Images have no readable Pretty view, so they open on the picture.
+                let view = match self.body_view {
+                    BodyView::Preview if !previewable => BodyView::Pretty,
+                    BodyView::Pretty if self.preview_image.is_some() => BodyView::Preview,
+                    view => view,
+                };
+                let seg = |id: &'static str, label: &'static str, value: BodyView, cx: &mut Context<Self>| {
+                    seg(id, label, value, cx).when(view == value && self.body_view != value, |d| d.bg(rgb(t.hover)).text_color(rgb(t.text)))
+                };
                 let copy_text = response.text();
+                let html = response.is_html().then(|| response.text());
                 div()
                     .flex_1()
                     .min_h_0()
@@ -1989,7 +2577,8 @@ impl RequestEditor {
                                     .rounded(px(4.))
                                     .bg(rgb(t.bg_secondary))
                                     .child(seg("view-pretty", "Pretty", BodyView::Pretty, cx))
-                                    .child(seg("view-raw", "Raw", BodyView::Raw, cx)),
+                                    .child(seg("view-raw", "Raw", BodyView::Raw, cx))
+                                    .when(previewable, |d| d.child(seg("view-preview", "Preview", BodyView::Preview, cx))),
                             )
                             .child(
                                 div()
@@ -1997,6 +2586,18 @@ impl RequestEditor {
                                     .child(response.language().to_uppercase()),
                             )
                             .child(div().flex_1())
+                            .when_some(html.clone(), |d, html| {
+                                d.child(ghost_button("open-browser", t).child(icon("icons/arrow-up-right.svg", 14., t.text_secondary)).child("Open in browser").on_click(
+                                    move |_, _, cx| {
+                                        let path = std::env::temp_dir().join(format!("floki-preview-{}.html", std::process::id()));
+                                        if std::fs::write(&path, &html).is_ok() {
+                                            if let Ok(url) = url::Url::from_file_path(&path) {
+                                                cx.open_url(url.as_str());
+                                            }
+                                        }
+                                    },
+                                ))
+                            })
                             .child(icon_button("copy-response", "icons/copy.svg", t).on_click(
                                 move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone())),
                             )),
@@ -2007,9 +2608,27 @@ impl RequestEditor {
                             .min_h_0()
                             .mx_4()
                             .mb_2()
-                            .font_family(MONO)
-                            .when_some(self.viewer.as_ref(), |d, viewer| {
-                                d.child(Editor::new(viewer).appearance(false).readonly(true).h_full())
+                            .when(view != BodyView::Preview, |d| {
+                                d.font_family(MONO).when_some(self.viewer.as_ref(), |d, viewer| {
+                                    d.child(Editor::new(viewer).appearance(false).readonly(true).h_full())
+                                })
+                            })
+                            .when(view == BodyView::Preview, |d| match (&self.preview_image, html) {
+                                (Some(image), _) => d.child(
+                                    div().size_full().flex().items_center().justify_center().child(img(image.clone()).max_w_full().max_h_full()),
+                                ),
+                                (None, Some(html)) => d.child(
+                                    div()
+                                        .id("html-preview")
+                                        .size_full()
+                                        .overflow_y_scroll()
+                                        .p_3()
+                                        .rounded(px(4.))
+                                        .border_1()
+                                        .border_color(rgb(t.border))
+                                        .child(gpui_kit::component::text::TextView::html("html-preview-text", html).selectable(true)),
+                                ),
+                                _ => d,
                             }),
                     )
                     .into_any_element()
@@ -2020,8 +2639,16 @@ impl RequestEditor {
                 response.headers.iter().map(|(k, v)| vec![k.clone(), v.clone()]).collect(),
             ),
             ResponseTab::Cookies => {
+                let manage = div()
+                    .id("manage-cookies")
+                    .px_4()
+                    .py_2()
+                    .cursor_pointer()
+                    .text_color(rgb(t.link))
+                    .child("Manage cookies")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(RequestEvent::ManageCookies)));
                 if response.cookies.is_empty() {
-                    centered().child("No cookies received from the server").into_any_element()
+                    centered().child("No cookies received from the server").child(manage).into_any_element()
                 } else {
                     table(
                         t,
@@ -2054,6 +2681,54 @@ impl RequestEditor {
             .into_any_element()
     }
 
+    fn render_report(&self, report: &ScriptReport, tests: bool, t: &Tokens) -> AnyElement {
+        let row = |icon_path: &'static str, tint: u32, text: String, detail: Option<String>| {
+            div()
+                .px_4()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(t.border))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().flex().items_center().gap_2().child(icon(icon_path, 14., tint)).child(div().text_color(rgb(t.text)).child(text)))
+                .when_some(detail, |d, detail| d.child(div().pl_6().font_family(MONO).text_color(rgb(t.error)).child(detail)))
+        };
+        let list = div().id("script-report").flex_1().min_h_0().overflow_y_scroll();
+        if tests {
+            let failed = report.tests.iter().filter(|t| !t.passed).count();
+            let summary = div().px_4().py_2().text_color(rgb(if failed > 0 { t.error } else { t.success })).child(format!(
+                "{} passed, {failed} failed",
+                report.tests.len() - failed
+            ));
+            list.child(summary)
+                .children(report.tests.iter().map(|test| {
+                    let (path, tint) = if test.passed { ("icons/check.svg", t.success) } else { ("icons/circle-alert.svg", t.error) };
+                    let name = if test.skipped { format!("{} (skipped)", test.name) } else { test.name.clone() };
+                    row(path, tint, name, test.error.clone())
+                }))
+                .into_any_element()
+        } else {
+            list.children(report.errors.iter().map(|e| row("icons/circle-alert.svg", t.error, e.clone(), None)))
+                .children(report.logs.iter().map(|log| {
+                    let tint = match log.level.as_str() {
+                        "error" => t.error,
+                        "warn" => t.warning,
+                        _ => t.text_secondary,
+                    };
+                    div()
+                        .px_4()
+                        .py_1()
+                        .border_b_1()
+                        .border_color(rgb(t.border))
+                        .font_family(MONO)
+                        .text_color(rgb(tint))
+                        .child(log.text.clone())
+                }))
+                .into_any_element()
+        }
+    }
+
     fn render_messages(&self, t: &Tokens, cx: &mut Context<Self>) -> AnyElement {
         let grpc = self.request.is_grpc();
         let (status, color): (String, u32) = if grpc {
@@ -2077,6 +2752,22 @@ impl RequestEditor {
             .gap_2()
             .child(div().text_size(px(14.)).text_color(rgb(t.text_secondary)).child("Response"))
             .child(div().flex_1())
+            .when(!self.ws_log.is_empty(), |d| {
+                d.child(
+                    div()
+                        .w(px(200.))
+                        .h(px(28.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(rgb(t.border))
+                        .child(icon("icons/search.svg", 12., t.text_tertiary))
+                        .child(Input::new(&self.log_filter).appearance(false).text_size(px(12.))),
+                )
+            })
             .child(dot(color))
             .child(div().text_color(rgb(color)).child(status))
             .when(!self.ws_log.is_empty(), |d| {
@@ -2114,8 +2805,14 @@ impl RequestEditor {
                 )
                 .into_any_element();
         }
+        let query = self.log_filter.read(cx).value().trim().to_lowercase();
+        let matches = |entry: &WsEntry| {
+            query.is_empty()
+                || entry.summary.to_lowercase().contains(&query)
+                || entry.tag.as_ref().is_some_and(|tag| tag.to_lowercase().contains(&query))
+        };
         // Newest first, so the latest message is visible without scrolling.
-        let rows = self.ws_log.iter().enumerate().rev().map(|(ix, entry)| {
+        let rows = self.ws_log.iter().enumerate().rev().filter(|(_, entry)| matches(entry)).map(|(ix, entry)| {
             let (path, tint) = match entry.kind {
                 WsKind::Sent => ("icons/arrow-up-right.svg", t.success),
                 WsKind::Received => ("icons/arrow-down-left.svg", t.info),
@@ -2147,14 +2844,23 @@ impl RequestEditor {
                                 .child(entry.summary.clone()),
                         )
                         .when_some(entry.tag.clone(), |d, tag| {
+                            let filter = tag.clone();
                             d.child(
                                 div()
+                                    .id(("ws-tag", ix))
                                     .flex_none()
                                     .px_1()
                                     .rounded(px(2.))
                                     .bg(rgb(t.bg_secondary))
                                     .text_color(rgb(t.text_secondary))
-                                    .child(tag),
+                                    .cursor_pointer()
+                                    .child(tag)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        let filter = filter.clone();
+                                        this.log_filter.update(cx, |s, cx| s.set_value(filter, window, cx));
+                                        cx.notify();
+                                    })),
                             )
                         })
                         .child(div().text_color(rgb(t.text_tertiary)).child(entry.at.clone()))
@@ -2235,6 +2941,7 @@ impl RequestEditor {
                     .child(match self.request.method.as_str() {
                         WEBSOCKET => "WS",
                         SOCKET_IO => "Socket.IO",
+                        MQTT => "MQTT",
                         GRPC => "gRPC",
                         _ => "HTTP",
                     }),
