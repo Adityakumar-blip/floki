@@ -29,6 +29,8 @@ Floki is a fast, native, local-first API client for Linux and Windows, built wit
 
 ### Keyboard shortcuts
 
+On macOS, use Cmd wherever Ctrl appears below (Ctrl+Tab stays Ctrl+Tab). The macOS build also has a menu bar with Quit (Cmd+Q) and the usual Edit commands.
+
 | Keys | Action |
 | --- | --- |
 | Ctrl+Enter | Send |
@@ -92,7 +94,7 @@ It prints each request and test, then exits with `0` when everything passed, `1`
 
 ## Data and privacy
 
-Data lives in `~/.local/share/Floki/` on Linux and `%LOCALAPPDATA%\Floki\` on Windows. `app.json` lists your workspaces and the signed-in account, and `workspaces/<id>.json` holds each workspace. Data from earlier versions is migrated on first start.
+Data lives in `~/.local/share/Floki/` on Linux, `%LOCALAPPDATA%\Floki\` on Windows and `~/Library/Application Support/Floki/` on macOS. `app.json` lists your workspaces and the signed-in account, and `workspaces/<id>.json` holds each workspace. Data from earlier versions is migrated on first start.
 
 Environment values can contain credentials, and the workspace files are plain-text JSON, so keep them private. Floki only sends requests to the URLs you enter and has no telemetry.
 
@@ -120,7 +122,23 @@ Install stable Rust and the Visual Studio 2022 C++ build tools with the Windows 
 
 Run `cargo build --locked` and `cargo test --locked` before committing (`.\dev.cmd check --locked` and `.\dev.cmd test --locked` on Windows).
 
-Release builds come from GitHub Actions (`.github/workflows/build.yml`): run the **Build** workflow manually or push a `v*` tag. It produces `Floki-windows-x64-setup.exe` (an installer with Start menu entry and uninstaller) `Floki-linux-x64.deb` (double-click to install on Ubuntu/Debian) and `Floki-linux-x64.tar.gz` (run `./Floki/install.sh` on other distros); tagged runs attach both to a GitHub release.
+Release builds come from GitHub Actions (`.github/workflows/build.yml`): run the **Build** workflow manually or push a `v*` tag. It produces `Floki-windows-x64-setup.exe` (an installer with Start menu entry and uninstaller) `Floki-linux-x64.deb` (double-click to install on Ubuntu/Debian) `Floki-linux-x64.tar.gz` (run `./Floki/install.sh` on other distros), `Floki-macos-universal.dmg` (Apple silicon and Intel, macOS 11 or later) and standalone `floki-cli` binaries for each platform; tagged runs attach them to a GitHub release. `scripts/build-macos.sh <version>` builds the macOS app on any Mac.
+
+### Signing the macOS app
+
+Without signing secrets the macOS app is ad-hoc signed, and the first time people open it macOS asks them to allow it in System Settings, then Privacy & Security, then Open Anyway. To ship an app that opens without that prompt, sign it with a Developer ID and have Apple notarize it. This needs an [Apple Developer Program](https://developer.apple.com/programs/) membership. Then:
+
+1. In Xcode (Settings, then Accounts, then Manage Certificates) or on developer.apple.com, create a **Developer ID Application** certificate. Export it from Keychain Access as a `.p12` file with a password.
+2. Create an app-specific password for your Apple ID at [account.apple.com](https://account.apple.com) (Sign-In and Security, then App-Specific Passwords), and note your 10-character Team ID from the developer account's Membership page.
+3. Add these repository secrets on GitHub (Settings, then Secrets and variables, then Actions):
+   - `MACOS_CERTIFICATE`: the `.p12` file as Base64 (`base64 -i cert.p12 | pbcopy`)
+   - `MACOS_CERTIFICATE_PASSWORD`: the `.p12` password
+   - `APPLE_ID`: your Apple ID email
+   - `APPLE_TEAM_ID`: your Team ID
+   - `APPLE_APP_PASSWORD`: the app-specific password
+4. Push a release tag. The macOS job signs with hardened runtime, submits the `.dmg` and `floki-cli` for notarization, and staples the ticket to the `.dmg`.
+
+Once releases are notarized, remove the "Open Anyway" paragraph (`id="mac-unsigned"`) from `site/index.html`.
 
 ## Credits
 

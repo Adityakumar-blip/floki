@@ -36,7 +36,7 @@ use ui::*;
 
 actions!(
     floki,
-    [Send, Save, NewTab, CloseTab, NextTab, PrevTab, ToggleSidebar, FocusUrl, Dismiss, OpenImport, OpenSearch]
+    [Send, Save, NewTab, CloseTab, NextTab, PrevTab, ToggleSidebar, FocusUrl, Dismiss, OpenImport, OpenSearch, Quit]
 );
 
 gpui_kit::assets::icon_assets!(ExtraIcons, [Clock, Layers, Code, Save, Send, FolderPlus, ArrowUpRight, ArrowDownLeft, Plug, Users, UserPlus, LogOut]);
@@ -1123,7 +1123,7 @@ impl Floki {
                     .text_color(rgb(t.text_secondary))
                     .child(icon("icons/search.svg", 14., t.text_secondary))
                     .child("Search Floki")
-                    .child(div().text_size(px(11.)).text_color(rgb(t.text_tertiary)).child("Ctrl+K"))
+                    .child(div().text_size(px(11.)).text_color(rgb(t.text_tertiary)).child(format!("{MOD}K")))
                     .on_click(cx.listener(|this, _, window, cx| this.open_search(window, cx))),
             )
             .child(
@@ -2104,7 +2104,7 @@ impl Floki {
                     })
                     .child(message),
             )
-            .child(div().text_color(rgb(t.text_tertiary)).child("Ctrl+Enter send · Ctrl+S save · Ctrl+T new tab"))
+            .child(div().text_color(rgb(t.text_tertiary)).child(format!("{MOD}Enter send · {MOD}S save · {MOD}T new tab")))
     }
 }
 
@@ -2264,6 +2264,43 @@ impl Render for Floki {
     }
 }
 
+/// How the shortcut modifier is written in hints: Cmd on macOS, Ctrl elsewhere.
+const MOD: &str = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
+
+/// The macOS menu bar; other platforms have no global menu.
+fn mac_menus(cx: &mut App) {
+    use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    // A single-window app is done when its window closes.
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
+    cx.set_menus([
+        Menu::new("Floki").items([MenuItem::action("Quit Floki", Quit)]),
+        Menu::new("File").items([
+            MenuItem::action("New Tab", NewTab),
+            MenuItem::action("Save", Save),
+            MenuItem::action("Import…", OpenImport),
+            MenuItem::separator(),
+            MenuItem::action("Close Tab", CloseTab),
+        ]),
+        Menu::new("Edit").items([
+            MenuItem::os_action("Undo", Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action("Cut", Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", Paste, OsAction::Paste),
+            MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+        ]),
+        Menu::new("View").items([MenuItem::action("Search", OpenSearch), MenuItem::action("Toggle Sidebar", ToggleSidebar)]),
+        Menu::new("Request").items([MenuItem::action("Send", Send), MenuItem::action("Focus URL", FocusUrl)]),
+    ]);
+}
+
 fn main() {
     application().with_assets(AppAssets).run(|cx| {
         init(cx);
@@ -2275,20 +2312,25 @@ fn main() {
             ])
             .expect("bundled fonts are valid");
         theme::apply(storage::load_workspace(&storage::load_app().active).theme, cx);
+        // "secondary" is Cmd on macOS and Ctrl elsewhere; tab switching is Ctrl+Tab everywhere.
         cx.bind_keys([
-            KeyBinding::new("ctrl-enter", Send, None),
-            KeyBinding::new("ctrl-s", Save, None),
-            KeyBinding::new("ctrl-t", NewTab, None),
-            KeyBinding::new("ctrl-w", CloseTab, None),
+            KeyBinding::new("secondary-enter", Send, None),
+            KeyBinding::new("secondary-s", Save, None),
+            KeyBinding::new("secondary-t", NewTab, None),
+            KeyBinding::new("secondary-w", CloseTab, None),
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-            KeyBinding::new("ctrl-\\", ToggleSidebar, None),
-            KeyBinding::new("ctrl-l", FocusUrl, None),
-            KeyBinding::new("ctrl-o", OpenImport, None),
-            KeyBinding::new("ctrl-k", OpenSearch, None),
-            KeyBinding::new("ctrl-p", OpenSearch, None),
+            KeyBinding::new("secondary-\\", ToggleSidebar, None),
+            KeyBinding::new("secondary-l", FocusUrl, None),
+            KeyBinding::new("secondary-o", OpenImport, None),
+            KeyBinding::new("secondary-k", OpenSearch, None),
+            KeyBinding::new("secondary-p", OpenSearch, None),
             KeyBinding::new("escape", Dismiss, None),
         ]);
+        if cfg!(target_os = "macos") {
+            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            mac_menus(cx);
+        }
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx))),
             window_min_size: Some(size(px(960.), px(600.))),

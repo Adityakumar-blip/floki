@@ -145,7 +145,7 @@ h2{font-size:clamp(32px,4.4vw,52px);line-height:1.02;letter-spacing:-.035em;font
 
 /* Downloads */
 .dl{display:grid;gap:20px;grid-template-columns:1fr}
-@media (min-width:860px){.dl{grid-template-columns:1fr 1fr}}
+@media (min-width:860px){.dl{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:14px;min-width:0}
 .card.active{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
 .card h3{margin:0;font-size:26px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:12px}
@@ -194,7 +194,7 @@ footer ul{display:flex;flex-wrap:wrap;gap:20px;list-style:none;margin:0;padding:
   <div class="wrap">
     <div>
       <h1>The API client that isn't a browser.</h1>
-      <p class="lede">Floki is a native app for Linux and Windows, written in Rust and drawn on your GPU. It imports your Postman collections and runs their scripts, streams AI responses as they arrive, and works without an account.</p>
+      <p class="lede">Floki is a native desktop app, written in Rust and drawn on your GPU. It imports your Postman collections and runs their scripts, streams AI responses as they arrive, and works without an account.</p>
       <div class="actions">
         <a class="btn" id="dl-primary" href="https://github.com/Adityakumar-blip/floki/releases/latest">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
@@ -202,7 +202,7 @@ footer ul{display:flex;flex-wrap:wrap;gap:20px;list-style:none;margin:0;padding:
         </a>
         <a class="btn quiet" href="#compare">Compare with Postman</a>
       </div>
-      <p class="release" id="dl-meta">Free for Linux and Windows.</p>
+      <p class="release" id="dl-meta">Free for <span class="platforms">Linux and Windows</span>.</p>
       <p class="soon" id="dl-soon" hidden>A macOS build is on the way. Meanwhile, the Linux and Windows builds are below.</p>
     </div>
 
@@ -365,7 +365,7 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
             <td class="us"><span class="mark yes" aria-hidden="true">✓</span>Free</td>
             <td><span class="mark part" aria-hidden="true">~</span>Free plan, paid plans for teams and higher limits</td></tr>
           <tr><th scope="row">Platforms</th>
-            <td class="us"><span class="mark part" aria-hidden="true">~</span>Linux and Windows; macOS on the way</td>
+            <td class="us" id="platform-cell"><span class="mark part" aria-hidden="true">~</span>Linux and Windows; macOS on the way</td>
             <td><span class="mark yes" aria-hidden="true">✓</span>macOS, Windows, Linux and the web</td></tr>
           <tr><th scope="row">Hosted mock servers, monitors and API docs</th>
             <td class="us"><span class="mark no" aria-hidden="true">✗</span>Not included</td>
@@ -393,8 +393,15 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
 <section id="download">
   <div class="wrap">
     <h2>Download Floki</h2>
-    <p class="sub" id="dl-sub">The latest release for Linux and Windows.</p>
+    <p class="sub" id="dl-sub">The latest release for <span class="platforms">Linux and Windows</span>.</p>
     <div class="dl">
+      <article class="card" id="card-mac" hidden>
+        <h3>macOS <small id="size-mac"></small></h3>
+        <p class="file">Floki-macos-universal.dmg</p>
+        <a class="btn" id="dl-mac" href="https://github.com/Adityakumar-blip/floki/releases/latest/download/Floki-macos-universal.dmg">Download for macOS</a>
+        <p>For Apple silicon and Intel Macs, macOS 11 or later. Open the .dmg and drag Floki into Applications.</p>
+        <p id="mac-unsigned">The app isn't notarized by Apple yet, so the first time you open it macOS says it can't check it. Open System Settings, then Privacy &amp; Security, and click Open Anyway next to the message about Floki. You only do this once.</p>
+      </article>
       <article class="card" id="card-windows">
         <h3>Windows <small id="size-windows"></small></h3>
         <p class="file">Floki-windows-x64-setup.exe</p>
@@ -412,7 +419,7 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
         </div>
       </article>
     </div>
-    <p class="cli">For CI, download just the command-line runner: <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-linux-x64">floki-cli for Linux</a> or <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-windows-x64.exe">floki-cli for Windows</a>. <a href="https://github.com/Adityakumar-blip/floki/releases">All releases</a>.</p>
+    <p class="cli">For CI, download just the command-line runner: <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-linux-x64">floki-cli for Linux</a> or <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-windows-x64.exe">floki-cli for Windows</a><span id="cli-mac" hidden> or <a href="https://github.com/Adityakumar-blip/floki/releases/latest/download/floki-cli-macos-universal">floki-cli for macOS</a></span>. <a href="https://github.com/Adityakumar-blip/floki/releases">All releases</a>.</p>
   </div>
 </section>
 </main>
@@ -432,8 +439,11 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
 (function(){
   var REPO='Adityakumar-blip/floki';
   var BASE='https://github.com/'+REPO+'/releases/latest/download/';
-  var ASSETS={windows:'Floki-windows-x64-setup.exe',linux:'Floki-linux-x64.deb'};
-  var NAMES={windows:'Windows',linux:'Linux'};
+  var ASSETS={windows:'Floki-windows-x64-setup.exe',linux:'Floki-linux-x64.deb',mac:'Floki-macos-universal.dmg'};
+  var NAMES={windows:'Windows',linux:'Linux',mac:'macOS'};
+  var KINDS=['windows','linux','mac'];
+  // macOS appears only once the latest release actually contains a Mac build.
+  var hasMac=false;
   var $=function(id){return document.getElementById(id)};
   $('year').textContent=new Date().getFullYear();
 
@@ -466,18 +476,24 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
     return 'other';
   }
   var os=detect();
-  var urls={windows:BASE+ASSETS.windows,linux:BASE+ASSETS.linux};
+  var urls={windows:BASE+ASSETS.windows,linux:BASE+ASSETS.linux,mac:BASE+ASSETS.mac};
   var sizes={};
   function mb(n){return (n/1048576).toFixed(1)+' MB'}
   function render(){
-    var target=(os==='windows'||os==='linux')?os:null;
+    var target=(os==='windows'||os==='linux'||(os==='mac'&&hasMac))?os:null;
     if(target){
       $('dl-primary').href=urls[target];
       $('dl-label').textContent='Download for '+NAMES[target];
       $('card-'+target).classList.add('active');
     }
-    $('dl-soon').hidden=os!=='mac';
-    ['windows','linux'].forEach(function(k){
+    $('dl-soon').hidden=!(os==='mac'&&!hasMac);
+    $('card-mac').hidden=!hasMac;
+    $('cli-mac').hidden=!hasMac;
+    if(hasMac){
+      [].forEach.call(document.querySelectorAll('.platforms'),function(el){el.textContent='macOS, Linux and Windows'});
+      $('platform-cell').innerHTML='<span class="mark yes" aria-hidden="true">✓</span>macOS, Linux and Windows';
+    }
+    KINDS.forEach(function(k){
       $('dl-'+k).href=urls[k];
       $('size-'+k).textContent=sizes[k]?mb(sizes[k]):'';
     });
@@ -487,13 +503,13 @@ pm.<span class="f">test</span>(<span class="s">"Status code is 201"</span>, () =
     .then(function(r){if(!r.ok) throw new Error(r.status);return r.json()})
     .then(function(rel){
       (rel.assets||[]).forEach(function(a){
-        ['windows','linux'].forEach(function(k){if(a.name===ASSETS[k]){urls[k]=a.browser_download_url;sizes[k]=a.size}});
+        KINDS.forEach(function(k){if(a.name===ASSETS[k]){urls[k]=a.browser_download_url;sizes[k]=a.size;if(k==='mac')hasMac=true}});
       });
       var meta=$('dl-meta');
-      meta.textContent='Free for Linux and Windows. Version '+(rel.tag_name||'')+(rel.published_at?', released '+new Date(rel.published_at).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'')+'. ';
+      meta.textContent='Free for '+(hasMac?'macOS, Linux and Windows':'Linux and Windows')+'. Version '+(rel.tag_name||'')+(rel.published_at?', released '+new Date(rel.published_at).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}):'')+'. ';
       var l=document.createElement('a');l.href=rel.html_url||'https://github.com/'+REPO+'/releases';l.textContent='Release notes';
       meta.appendChild(l);
-      if(rel.tag_name) $('dl-sub').textContent='Version '+rel.tag_name+' for Linux and Windows.';
+      if(rel.tag_name) $('dl-sub').textContent='Version '+rel.tag_name+' for '+(hasMac?'macOS, Linux and Windows':'Linux and Windows')+'.';
       render();
     })
     .catch(function(){});
