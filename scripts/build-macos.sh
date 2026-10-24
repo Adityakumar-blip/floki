@@ -46,7 +46,9 @@ cp dist/floki-cli-universal dist/floki-cli-macos-universal
 
 ln -s /Applications dist/dmg/Applications
 rm -f dist/Floki-macos-universal.dmg
-hdiutil create -volname Floki -srcfolder dist/dmg -ov -format UDZO dist/Floki-macos-universal.dmg
+# hdiutil's own size estimate is often too small for the app ("No space left on device"), so give it room.
+SIZE_MB=$(( $(du -sm dist/dmg/Floki.app | cut -f1) + 64 ))
+hdiutil create -volname Floki -srcfolder dist/dmg -size "${SIZE_MB}m" -fs HFS+ -ov -format UDZO dist/Floki-macos-universal.dmg
 if [ "$IDENTITY" != "-" ]; then
     sign dist/Floki-macos-universal.dmg
 fi

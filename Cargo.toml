@@ -1,6 +1,6 @@
 [package]
 name = "floki"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "A fast, local-first API workbench built with Rust and GPUI"
 
